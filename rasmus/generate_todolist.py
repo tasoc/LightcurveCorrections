@@ -13,7 +13,7 @@ from bottleneck import nanmedian, nansum
 import matplotlib.pyplot as plt
 
 if __name__ == '__main__':
-	starlist = np.genfromtxt('Data_Batch_TDA.txt', delimiter=',', dtype=None)
+	starlist = np.genfromtxt('data/Data_Batch_TDA.txt', delimiter=',', dtype=None)
 
 	pri = {}
 	for k, star in enumerate(starlist):
@@ -30,7 +30,7 @@ if __name__ == '__main__':
 		else:
 			datasource = 'tpf'
 
-		data = np.loadtxt(os.path.join('noisy_files_TDA', 'Star%d.noisy' % starid))
+		data = np.loadtxt(os.path.join('data', 'noisy_files_TDA', 'Star%d.noisy' % starid))
 		sector = np.floor(data[:,0] / 27.4) + 1
 		sectors = [int(s) for s in np.unique(sector)]
 
@@ -40,7 +40,7 @@ if __name__ == '__main__':
 			data_sector = data[indx, :]
 			print('Star%d-sector%02d.noisy' % (starid, s))
 
-			np.savetxt(os.path.join('noisy_by_sectors', 'Star%d-sector%02d.noisy' % (starid, s)), data_sector)
+			np.savetxt(os.path.join('data', 'noisy_by_sectors', 'Star%d-sector%02d.noisy' % (starid, s)), data_sector)
 
 			conn = sqlite3.connect('todo-sector%02d.sqlite' % s)
 			cursor = conn.cursor()

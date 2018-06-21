@@ -100,7 +100,7 @@ if __name__ == '__main__':
 		for k, star in enumerate(stars):
 			starid = star['starid']
 
-			data = np.loadtxt(os.path.join('noisy_by_sectors', 'Star%d-sector%02d.noisy' % (starid, sector)))
+			data = np.loadtxt(os.path.join('data', 'noisy_by_sectors', 'Star%d-sector%02d.noisy' % (starid, sector)))
 			#print(data.shape)
 
 			# This could be done in the photometry code as well:
@@ -115,9 +115,12 @@ if __name__ == '__main__':
 		# 
 		variability = variability/np.median(variability)
 
-		plt.figure()
-		plt.hist(variability, 50, range=(0, 10))
-		plt.xlabel('Variability')
+		fig = plt.figure()
+		ax = fig.add_subplot(111)
+		ax.hist(variability, bins=np.logspace(np.log10(0.1), np.log10(1000.0), 50))
+		ax.set_xscale('log')
+		ax.set_xlabel('Variability')
+		plt.show()
 
 		# Filter out stars that are variable:
 		indx_quiet = (variability < 1.5)
@@ -130,7 +133,6 @@ if __name__ == '__main__':
 		for i, j in itertools.combinations(range(N), 2):
 			r = pearson(mat[i, :], mat[j, :])
 			correlations[i,j] = correlations[j,i] = np.abs(r)
-		print(correlations)
 
 		# Find the median absolute correlation between each lightcurve and all other lightcurves:
 		c = nanmedian(correlations, axis=0)
@@ -139,7 +141,10 @@ if __name__ == '__main__':
 		indx = np.argsort(c)[::-1]
 
 		# Only keep the top 50% of the lightcurves that are most correlated:
-		mat = mat[indx[:N//2], :]
+		mat = mat[indx[:int(0.75*N)], :]
+
+		# Print the final shape of the matrix:
+		print(mat.shape)
 
 		# Simple low-pass filter of the individual targets:
 		mat = move_median_central(mat, 48, axis=1)	
@@ -150,7 +155,7 @@ if __name__ == '__main__':
 		replace(mat, np.nan, 0)
 		
 		# Calculate the principle components:
-		mat = StandardScaler(copy=False).fit_transform(mat)
+		#mat = StandardScaler(copy=False).fit_transform(mat)
 		pca = PCA(n_components=5)
 		pca.fit(mat)
 		cbv = pca.components_
@@ -180,7 +185,7 @@ if __name__ == '__main__':
 
 		for star in stars:
 			starid = star['starid']
-			time, flux = np.loadtxt(os.path.join('noisy_by_sectors', 'Star%d-sector%02d.noisy' % (starid, sector)), usecols=(0, 1), unpack=True)
+			time, flux = np.loadtxt(os.path.join('data', 'noisy_by_sectors', 'Star%d-sector%02d.noisy' % (starid, sector)), usecols=(0, 1), unpack=True)
 			
 			# Fit the CBV to the flux:
 			flux_filter = cbv.fit(flux, Ncbvs=5)
