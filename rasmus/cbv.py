@@ -3,6 +3,7 @@ import numpy as np
 import sqlite3
 import matplotlib.pyplot as plt
 import os
+import glob
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from bottleneck import replace, allnan, nansum, move_median, nanmedian
@@ -58,7 +59,15 @@ class CBV(object):
 if __name__ == '__main__':
 
 	# Pick a sector, any sector....
-	sector = 1
+	sector = 2
+
+	# Other settings:
+	threshold_variability = 1.5
+	threshold_correlation = 0.75
+
+	# Remove old plots:
+	for f in glob.iglob("plots/star*-sector%02d.png" % sector):
+		os.remove(f)
 
 	# Open the TODO file for that sector:
 	filepath_todo = 'todo-sector%02d.sqlite' % sector
@@ -84,12 +93,11 @@ if __name__ == '__main__':
 
 		cursor.execute("""SELECT * FROM todolist LEFT JOIN diagnostics ON todolist.priority=diagnostics.priority WHERE
 			datasource='ffi'
-			AND cbv_area=?
-			AND status=0;""", (cbv_area, ))
+			AND status=0;""")
 		stars = cursor.fetchall()
 		
 		Nstars = len(stars)
-		Ntimes = 1316 # We should maybe store this somewhere???
+		Ntimes = 1315 # We should maybe store this somewhere???
 		print(Nstars)
 
 		# Make the matrix that will hold all the lightcurves:
@@ -110,7 +118,7 @@ if __name__ == '__main__':
 			variability[k] = np.nanstd(flux - np.polyval(p, data[:,0]))
 
 			# Normalize the data and store it in the rows of the matrix:
-			mat[k, :] = data[:,1] / star['mean_flux']
+			mat[k, :] = data[:,1] / star['mean_flux'] - 1.0
 
 		# 
 		variability = variability/np.median(variability)
@@ -118,12 +126,13 @@ if __name__ == '__main__':
 		fig = plt.figure()
 		ax = fig.add_subplot(111)
 		ax.hist(variability, bins=np.logspace(np.log10(0.1), np.log10(1000.0), 50))
+		ax.axvline(threshold_variability, color='r')
 		ax.set_xscale('log')
 		ax.set_xlabel('Variability')
 		plt.show()
 
 		# Filter out stars that are variable:
-		indx_quiet = (variability < 1.5)
+		indx_quiet = (variability < threshold_variability)
 		mat = mat[indx_quiet, :]
 
 		# Calculate the correlation matrix between all lightcurves:
@@ -141,31 +150,39 @@ if __name__ == '__main__':
 		indx = np.argsort(c)[::-1]
 
 		# Only keep the top 50% of the lightcurves that are most correlated:
-		mat = mat[indx[:int(0.75*N)], :]
+		mat = mat[indx[:int(threshold_correlation*N)], :]
 
 		# Print the final shape of the matrix:
 		print(mat.shape)
 
 		# Simple low-pass filter of the individual targets:
-		mat = move_median_central(mat, 48, axis=1)	
+		#mat = move_median_central(mat, 48, axis=1)	
 
 		# Replace NaNs with zero... We should do something better...
 		indx_nancol = allnan(mat, axis=0) 
 		mat = mat[:, ~indx_nancol]
 		replace(mat, np.nan, 0)
+
+		for k in range(mat.shape[0]):
+			mat[k,:] /= np.nanstd(mat[k,:])
 		
 		# Calculate the principle components:
 		#mat = StandardScaler(copy=False).fit_transform(mat)
-		pca = PCA(n_components=5)
+		pca = PCA(n_components=8)
 		pca.fit(mat)
-		cbv = pca.components_
-		cbv = np.transpose(cbv)
+		cbv = np.transpose(pca.components_)
 
 		# Not very clever, but puts NaNs back into the CBVs:
-		mat = np.empty((Ntimes, 5), dtype='float64')
+		mat = np.empty((Ntimes, cbv.shape[1]), dtype='float64')
 		mat.fill(np.nan)
 		mat[~indx_nancol, :] = cbv
 		cbv = mat
+
+		plt.figure()
+		plt.plot(np.arange(1, cbv.shape[1]+1), pca.explained_variance_ratio_, '.-')
+		plt.xlabel('CBV number')
+		plt.ylabel('Variance explained ratio')
+		plt.show()
 
 		# Save the CBV to file:
 		np.save('cbv-%d.npy' % cbv_area, cbv)
@@ -188,7 +205,7 @@ if __name__ == '__main__':
 			time, flux = np.loadtxt(os.path.join('data', 'noisy_by_sectors', 'Star%d-sector%02d.noisy' % (starid, sector)), usecols=(0, 1), unpack=True)
 			
 			# Fit the CBV to the flux:
-			flux_filter = cbv.fit(flux, Ncbvs=5)
+			flux_filter = cbv.fit(flux, Ncbvs=4)
 			
 			fig = plt.figure()
 			plt.plot(time, flux)
