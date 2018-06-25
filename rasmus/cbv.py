@@ -1,4 +1,10 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+.. codeauthor:: Rasmus Handberg <rasmush@phys.au.dk>
+"""
 
+from __future__ import division, with_statement, print_function, absolute_import
 import numpy as np
 import sqlite3
 import matplotlib.pyplot as plt
@@ -28,7 +34,7 @@ def move_median_central(x, width_points, axis=0):
 #------------------------------------------------------------------------------
 def pearson(x, y):
 	indx = np.isfinite(x) & np.isfinite(y)
-	r, pval = pearsonr(x[indx], y[indx])
+	r, _ = pearsonr(x[indx], y[indx]) # Second outout (p-value) is not used
 	return r
 
 #------------------------------------------------------------------------------
@@ -46,12 +52,28 @@ class CBV(object):
 	def _lhood(self, coeffs, flux):
 		return nansum((flux - self.mdl(coeffs))**2)
 
-	def fit(self, flux, Ncbvs=2):
-		
+	def fit(self, flux, Ncbvs=2, sigma_clip=4.0, maxiter=3):
+		# Initial guesses for coefficients:
 		coeffs0 = np.zeros(Ncbvs + 1)
-		res = minimize(self._lhood, coeffs0, args=(flux, ), method='Powell')
+		coeffs0[-1] = nanmedian(flux)
 
-		flux_filter = self.mdl(res.x)
+		iters = 0
+		flux = np.copy(flux)
+		while iters <= maxiter:
+			iters += 1
+
+			# Do the fit:
+			res = minimize(self._lhood, coeffs0, args=(flux, ), method='Powell')
+			flux_filter = self.mdl(res.x)
+
+			# Do robust sigma clipping:
+			absdev = np.abs( flux - flux_filter )
+			mad = 1.4826*nanmedian(absdev)
+			indx = np.greater(absdev, sigma_clip*mad, where=np.isfinite(flux))
+			if np.any(indx):
+				flux[indx] = np.nan
+			else:
+				break
 
 		return flux_filter
 
@@ -62,11 +84,12 @@ if __name__ == '__main__':
 	sector = 2
 
 	# Other settings:
-	threshold_variability = 1.5
-	threshold_correlation = 0.75
+	threshold_variability = 1.3
+	threshold_correlation = 0.50
 
 	# Remove old plots:
-	for f in glob.iglob("plots/star*-sector%02d.png" % sector):
+	os.makedirs("plots/sector%02d/" % sector, exist_ok=True)
+	for f in glob.iglob("plots/sector%02d/*.png" % sector):
 		os.remove(f)
 
 	# Open the TODO file for that sector:
@@ -129,7 +152,8 @@ if __name__ == '__main__':
 		ax.axvline(threshold_variability, color='r')
 		ax.set_xscale('log')
 		ax.set_xlabel('Variability')
-		plt.show()
+		fig.savefig('plots/sector%02d/variability.png' % (sector, ))
+		plt.close(fig)
 
 		# Filter out stars that are variable:
 		indx_quiet = (variability < threshold_variability)
@@ -163,6 +187,7 @@ if __name__ == '__main__':
 		mat = mat[:, ~indx_nancol]
 		replace(mat, np.nan, 0)
 
+		# Is this even needed?
 		for k in range(mat.shape[0]):
 			mat[k,:] /= np.nanstd(mat[k,:])
 		
@@ -178,11 +203,21 @@ if __name__ == '__main__':
 		mat[~indx_nancol, :] = cbv
 		cbv = mat
 
-		plt.figure()
-		plt.plot(np.arange(1, cbv.shape[1]+1), pca.explained_variance_ratio_, '.-')
-		plt.xlabel('CBV number')
-		plt.ylabel('Variance explained ratio')
-		plt.show()
+		fig = plt.figure()
+		ax = fig.add_subplot(111)
+		ax.plot(np.arange(1, cbv.shape[1]+1), pca.explained_variance_ratio_, '.-')
+		ax.set_xlabel('CBV number')
+		ax.set_ylabel('Variance explained ratio')
+		fig.savefig('plots/sector%02d/cbv-expvar.png' % (sector, ))
+		plt.close(fig)
+
+		fig, axes = plt.subplots(4, 2, figsize=(12, 6))
+		for k, ax in enumerate(axes.flatten()):
+			ax.plot(cbv[:, k], '-')
+			ax.set_title('Basis Vector %d' % (k+1))
+		plt.tight_layout()
+		fig.savefig('plots/sector%02d/cbvs.png' % (sector, ))
+		plt.close(fig)
 
 		# Save the CBV to file:
 		np.save('cbv-%d.npy' % cbv_area, cbv)
@@ -190,6 +225,8 @@ if __name__ == '__main__':
 		#---------------------------------------------------------------------------------------------------------
 		# CORRECTING STARS
 		#---------------------------------------------------------------------------------------------------------
+
+		print("CORRECTING STARS...")
 
 		cursor.execute("""SELECT * FROM todolist WHERE
 			datasource='ffi'
@@ -206,13 +243,15 @@ if __name__ == '__main__':
 			
 			# Fit the CBV to the flux:
 			flux_filter = cbv.fit(flux, Ncbvs=4)
-			
+
 			fig = plt.figure()
-			plt.plot(time, flux)
-			plt.plot(time, flux_filter)
-			fig.savefig('plots/star%d-sector%02d.png' % (starid, sector))
+			ax1 = fig.add_subplot(211)
+			ax1.plot(time, flux)
+			ax1.plot(time, flux_filter)
+			ax1.set_xticks([])
+			ax2 = fig.add_subplot(212)
+			ax2.plot(time, flux/flux_filter-1)
+			ax2.set_xlabel('Time')
+			plt.tight_layout()
+			fig.savefig('plots/sector%02d/star%d.png' % (sector, starid))
 			plt.close(fig)
-	
-	plt.show()
-
-
