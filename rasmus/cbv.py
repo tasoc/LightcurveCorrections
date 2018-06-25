@@ -5,6 +5,7 @@
 """
 
 from __future__ import division, with_statement, print_function, absolute_import
+from six.moves import range
 import numpy as np
 import sqlite3
 import matplotlib.pyplot as plt
@@ -54,7 +55,7 @@ class CBV(object):
 
 	def fit(self, flux, Ncbvs=2, sigma_clip=4.0, maxiter=3):
 		# Initial guesses for coefficients:
-		coeffs0 = np.zeros(Ncbvs + 1)
+		coeffs0 = np.zeros(Ncbvs + 1, dtype='float64')
 		coeffs0[-1] = nanmedian(flux)
 
 		iters = 0
@@ -114,9 +115,32 @@ if __name__ == '__main__':
 
 		print("We are running CBV_AREA=%d" % cbv_area)
 
-		cursor.execute("""SELECT * FROM todolist LEFT JOIN diagnostics ON todolist.priority=diagnostics.priority WHERE
+		# Find the median of the variabilities:
+		# SQLite does not have a median function so we are going to
+		# load all the values into an array and make Python do the
+		# heavy lifting.
+		cursor.execute("""SELECT variability FROM todolist LEFT JOIN diagnostics ON todolist.priority=diagnostics.priority WHERE
 			datasource='ffi'
 			AND status=0;""")
+		variability = np.array([row[0] for row in cursor.fetchall()], dtype='float64')
+		median_variability = np.median(variability)
+		print(median_variability)
+
+		# Plot the distribution of variability for all stars:
+		fig = plt.figure()
+		ax = fig.add_subplot(111)
+		ax.hist(variability/median_variability, bins=np.logspace(np.log10(0.1), np.log10(1000.0), 50))
+		ax.axvline(threshold_variability, color='r')
+		ax.set_xscale('log')
+		ax.set_xlabel('Variability')
+		fig.savefig('plots/sector%02d/variability.png' % (sector, ))
+		plt.close(fig)
+
+		# Get the list of star that we are going to load in the lightcurves for:
+		cursor.execute("""SELECT todolist.starid,mean_flux FROM todolist LEFT JOIN diagnostics ON todolist.priority=diagnostics.priority WHERE
+			datasource='ffi'
+			AND status=0
+			AND variability < ?;""", (threshold_variability*median_variability, ))
 		stars = cursor.fetchall()
 		
 		Nstars = len(stars)
@@ -126,44 +150,19 @@ if __name__ == '__main__':
 		# Make the matrix that will hold all the lightcurves:
 		mat = np.empty((Nstars, Ntimes), dtype='float64')
 		mat.fill(np.nan)
-
-		variability = np.zeros(Nstars)
 		for k, star in enumerate(stars):
 			starid = star['starid']
 
-			data = np.loadtxt(os.path.join('data', 'noisy_by_sectors', 'Star%d-sector%02d.noisy' % (starid, sector)))
-			#print(data.shape)
-
-			# This could be done in the photometry code as well:
-			flux = data[:,1] / star['mean_flux']
-			indx = np.isfinite(flux)
-			p = np.polyfit(data[indx,0], flux[indx], 3)
-			variability[k] = np.nanstd(flux - np.polyval(p, data[:,0]))
+			flux = np.loadtxt(os.path.join('data', 'noisy_by_sectors', 'Star%d-sector%02d.noisy' % (starid, sector)), usecols=(1, ), unpack=True)
+			#print(flux.shape)
 
 			# Normalize the data and store it in the rows of the matrix:
-			mat[k, :] = data[:,1] / star['mean_flux'] - 1.0
-
-		# 
-		variability = variability/np.median(variability)
-
-		fig = plt.figure()
-		ax = fig.add_subplot(111)
-		ax.hist(variability, bins=np.logspace(np.log10(0.1), np.log10(1000.0), 50))
-		ax.axvline(threshold_variability, color='r')
-		ax.set_xscale('log')
-		ax.set_xlabel('Variability')
-		fig.savefig('plots/sector%02d/variability.png' % (sector, ))
-		plt.close(fig)
-
-		# Filter out stars that are variable:
-		indx_quiet = (variability < threshold_variability)
-		mat = mat[indx_quiet, :]
+			mat[k, :] = flux / star['mean_flux'] - 1.0
 
 		# Calculate the correlation matrix between all lightcurves:
-		N = mat.shape[0]
-		correlations = np.empty((N, N), dtype='float64')
+		correlations = np.empty((Nstars, Nstars), dtype='float64')
 		np.fill_diagonal(correlations, np.nan) # Put NaNs on the diagonal
-		for i, j in itertools.combinations(range(N), 2):
+		for i, j in itertools.combinations(range(Nstars), 2):
 			r = pearson(mat[i, :], mat[j, :])
 			correlations[i,j] = correlations[j,i] = np.abs(r)
 
@@ -174,7 +173,7 @@ if __name__ == '__main__':
 		indx = np.argsort(c)[::-1]
 
 		# Only keep the top 50% of the lightcurves that are most correlated:
-		mat = mat[indx[:int(threshold_correlation*N)], :]
+		mat = mat[indx[:int(threshold_correlation*Nstars)], :]
 
 		# Print the final shape of the matrix:
 		print(mat.shape)
@@ -182,27 +181,27 @@ if __name__ == '__main__':
 		# Simple low-pass filter of the individual targets:
 		#mat = move_median_central(mat, 48, axis=1)	
 
-		# Replace NaNs with zero... We should do something better...
-		indx_nancol = allnan(mat, axis=0) 
+		# Find columns where all stars have NaNs and remove them:
+		indx_nancol = allnan(mat, axis=0)
 		mat = mat[:, ~indx_nancol]
-		replace(mat, np.nan, 0)
 
-		# Is this even needed?
+		# TODO: Is this even needed? Or should it be done earlier?
 		for k in range(mat.shape[0]):
-			mat[k,:] /= np.nanstd(mat[k,:])
+			mat[k, :] /= np.nanstd(mat[k, :])
 		
 		# Calculate the principle components:
+		replace(mat, np.nan, 0) # Replace NaNs with zero... We should do something better...
 		#mat = StandardScaler(copy=False).fit_transform(mat)
 		pca = PCA(n_components=8)
 		pca.fit(mat)
-		cbv = np.transpose(pca.components_)
 
 		# Not very clever, but puts NaNs back into the CBVs:
-		mat = np.empty((Ntimes, cbv.shape[1]), dtype='float64')
-		mat.fill(np.nan)
-		mat[~indx_nancol, :] = cbv
-		cbv = mat
+		# For some reason I also choose to transpose the CBV matrix
+		cbv = np.empty((Ntimes, 8), dtype='float64')
+		cbv.fill(np.nan)
+		cbv[~indx_nancol, :] = np.transpose(pca.components_)
 
+		# Plot the "effectiveness" of each CBV:
 		fig = plt.figure()
 		ax = fig.add_subplot(111)
 		ax.plot(np.arange(1, cbv.shape[1]+1), pca.explained_variance_ratio_, '.-')
@@ -211,7 +210,8 @@ if __name__ == '__main__':
 		fig.savefig('plots/sector%02d/cbv-expvar.png' % (sector, ))
 		plt.close(fig)
 
-		fig, axes = plt.subplots(4, 2, figsize=(12, 6))
+		# Plot all the CBVs:
+		fig, axes = plt.subplots(4, 2, figsize=(12, 8))
 		for k, ax in enumerate(axes.flatten()):
 			ax.plot(cbv[:, k], '-')
 			ax.set_title('Basis Vector %d' % (k+1))

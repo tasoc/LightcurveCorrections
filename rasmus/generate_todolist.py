@@ -63,6 +63,7 @@ if __name__ == '__main__':
 				elaptime REAL NOT NULL,
 				mean_flux DOUBLE PRECISION,
 				variance DOUBLE PRECISION,
+				variability DOUBLE PRECISION,
 				mask_size INT,
 				pos_row REAL,
 				pos_column REAL,
@@ -70,10 +71,24 @@ if __name__ == '__main__':
 				stamp_resizes INT,
 				errors TEXT
 			);""")
+
+			# Create the same indicies as is available in the real todolists:
+			cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS priority_idx ON todolist (priority);")
+			cursor.execute("CREATE INDEX IF NOT EXISTS starid_datasource_idx ON todolist (starid, datasource);") # FIXME: Should be "UNIQUE", but something is weird in ETE-6?!
+			cursor.execute("CREATE INDEX IF NOT EXISTS status_idx ON todolist (status);")
+			cursor.execute("CREATE INDEX IF NOT EXISTS starid_idx ON todolist (starid);")
+			cursor.execute("CREATE INDEX IF NOT EXISTS variability_idx ON diagnostics (variability);")
 			conn.commit()
 
 			mean_flux = nanmedian(data_sector[:,1])
 			variance = nansum((data_sector[:,1] - mean_flux)**2) / (data_sector.shape[0] - 1)
+
+			# This could be done in the photometry code as well:
+			time = data_sector[:,0]
+			flux = data_sector[:,1] / mean_flux
+			indx = np.isfinite(flux)
+			p = np.polyfit(time[indx], flux[indx], 3)
+			variability = np.nanstd(flux - np.polyval(p, time))
 
 			elaptime = np.random.normal(3.14, 0.5)
 			pos_row = np.random.uniform(-0.5, 2047.5)
@@ -94,29 +109,33 @@ if __name__ == '__main__':
 			#	plt.plot(data[:,0], data[:,1])
 			#	plt.show()
 
-			cursor.execute("INSERT INTO todolist (priority,starid,tmag,datasource,status,camera,ccd,cbv_area) VALUES ({priority:d},{starid:d},{tmag:f},'{datasource:s}',0,{camera:d},{ccd:d},{cbv_area:d});".format(
-				priority=pri[s],
-				starid=starid,
-				tmag=tmag,
-				datasource=datasource,
-				camera=1,
-				ccd=1,
-				cbv_area=cbv_area
+			cursor.execute("INSERT INTO todolist (priority,starid,tmag,datasource,status,camera,ccd,cbv_area) VALUES (?,?,?,?,0,?,?,?);", (
+				pri[s],
+				starid,
+				tmag,
+				datasource,
+				1,
+				1,
+				cbv_area
 			))
-			cursor.execute("INSERT INTO diagnostics (priority,starid,elaptime,mean_flux,variance,mask_size,pos_row,pos_column,contamination,stamp_resizes) VALUES ({priority:d},{starid:d},{elaptime:f},{mean_flux:f},{variance:f},{mask_size:d},{pos_row:f},{pos_column:f},0.0,0);".format(
-				priority=pri[s],
-				starid=starid,
-				elaptime=elaptime,
-				mean_flux=mean_flux,
-				variance=variance,
-				mask_size=int(Npixels),
-				pos_row=pos_row,
-				pos_column=pos_column
+			cursor.execute("INSERT INTO diagnostics (priority,starid,elaptime,mean_flux,variance,variability,mask_size,pos_row,pos_column,contamination,stamp_resizes) VALUES (?,?,?,?,?,?,?,?,?,0.0,0);", (
+				pri[s],
+				starid,
+				elaptime,
+				mean_flux,
+				variance,
+				variability,
+				int(Npixels),
+				pos_row,
+				pos_column
 			))
 
 			conn.commit()
 
 			pri[s] += 1
+
+
+	conn.commit()
 
 	cursor.close()
 	conn.close()
