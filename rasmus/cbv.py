@@ -45,6 +45,7 @@ class CBV(object):
 		self.cbv = np.load(filepath)
 
 	def mdl(self, coeffs):
+		coeffs = np.atleast_1d(coeffs)
 		m = coeffs[-1]
 		for k in range(len(coeffs)-1):
 			m += coeffs[k]*self.cbv[:,k]
@@ -54,27 +55,39 @@ class CBV(object):
 		return nansum((flux - self.mdl(coeffs))**2)
 
 	def fit(self, flux, Ncbvs=2, sigma_clip=4.0, maxiter=3):
-		# Initial guesses for coefficients:
-		coeffs0 = np.zeros(Ncbvs + 1, dtype='float64')
-		coeffs0[-1] = nanmedian(flux)
 
-		iters = 0
-		flux = np.copy(flux)
-		while iters <= maxiter:
-			iters += 1
+		bic = np.zeros(self.cbv.shape[1])
+		loglike = np.zeros(self.cbv.shape[1])
+		for Ncbvs in range(0, self.cbv.shape[1]):
 
-			# Do the fit:
-			res = minimize(self._lhood, coeffs0, args=(flux, ), method='Powell')
-			flux_filter = self.mdl(res.x)
+			# Initial guesses for coefficients:
+			coeffs0 = np.zeros(Ncbvs + 1, dtype='float64')
+			coeffs0[-1] = nanmedian(flux)
 
-			# Do robust sigma clipping:
-			absdev = np.abs( flux - flux_filter )
-			mad = 1.4826*nanmedian(absdev)
-			indx = np.greater(absdev, sigma_clip*mad, where=np.isfinite(flux))
-			if np.any(indx):
-				flux[indx] = np.nan
-			else:
-				break
+			iters = 0
+			flux = np.copy(flux)
+			while iters <= maxiter:
+				iters += 1
+
+				# Do the fit:
+				res = minimize(self._lhood, coeffs0, args=(flux, ), method='Powell')
+				flux_filter = self.mdl(res.x)
+
+				# Do robust sigma clipping:
+				absdev = np.abs( flux - flux_filter )
+				mad = 1.4826*nanmedian(absdev)
+				indx = np.greater(absdev, sigma_clip*mad, where=np.isfinite(flux))
+				if np.any(indx):
+					flux[indx] = np.nan
+				else:
+					break
+
+			loglike[Ncbvs] = -res.fun/2
+			bic[Ncbvs] = np.log(np.sum(np.isfinite(flux)))*len(coeffs0) + res.fun
+
+		#plt.figure()
+		#plt.plot(bic, '.-')
+		#plt.show()
 
 		return flux_filter
 
@@ -86,7 +99,7 @@ if __name__ == '__main__':
 
 	# Other settings:
 	threshold_variability = 1.3
-	threshold_correlation = 0.50
+	threshold_correlation = 1.0
 
 	# Remove old plots:
 	os.makedirs("plots/sector%02d/" % sector, exist_ok=True)
@@ -114,6 +127,8 @@ if __name__ == '__main__':
 		#---------------------------------------------------------------------------------------------------------
 
 		print("We are running CBV_AREA=%d" % cbv_area)
+		camera = np.floor(cbv_area/100)
+		print(camera)
 
 		# Find the median of the variabilities:
 		# SQLite does not have a median function so we are going to
@@ -121,7 +136,8 @@ if __name__ == '__main__':
 		# heavy lifting.
 		cursor.execute("""SELECT variability FROM todolist LEFT JOIN diagnostics ON todolist.priority=diagnostics.priority WHERE
 			datasource='ffi'
-			AND status=0;""")
+			AND status=0
+			AND cbv_area=?;""", (cbv_area, ))
 		variability = np.array([row[0] for row in cursor.fetchall()], dtype='float64')
 		median_variability = np.median(variability)
 		print(median_variability)
@@ -133,14 +149,17 @@ if __name__ == '__main__':
 		ax.axvline(threshold_variability, color='r')
 		ax.set_xscale('log')
 		ax.set_xlabel('Variability')
-		fig.savefig('plots/sector%02d/variability.png' % (sector, ))
+		fig.savefig('plots/sector%02d/variability-area%d.png' % (sector, cbv_area))
 		plt.close(fig)
 
 		# Get the list of star that we are going to load in the lightcurves for:
+		# We have put a hard limit of a maximum of 10000 targets for now.
 		cursor.execute("""SELECT todolist.starid,mean_flux FROM todolist LEFT JOIN diagnostics ON todolist.priority=diagnostics.priority WHERE
 			datasource='ffi'
 			AND status=0
-			AND variability < ?;""", (threshold_variability*median_variability, ))
+			AND cbv_area=?
+			AND variability < ?
+		ORDER BY variability ASC LIMIT 10000;""", (cbv_area, threshold_variability*median_variability))
 		stars = cursor.fetchall()
 		
 		Nstars = len(stars)
@@ -157,7 +176,7 @@ if __name__ == '__main__':
 			#print(flux.shape)
 
 			# Normalize the data and store it in the rows of the matrix:
-			mat[k, :] = flux / star['mean_flux'] - 1.0
+			mat[k, :] = flux / star['mean_flux'] - 1.0			
 
 		# Calculate the correlation matrix between all lightcurves:
 		correlations = np.empty((Nstars, Nstars), dtype='float64')
@@ -207,7 +226,7 @@ if __name__ == '__main__':
 		ax.plot(np.arange(1, cbv.shape[1]+1), pca.explained_variance_ratio_, '.-')
 		ax.set_xlabel('CBV number')
 		ax.set_ylabel('Variance explained ratio')
-		fig.savefig('plots/sector%02d/cbv-expvar.png' % (sector, ))
+		fig.savefig('plots/sector%02d/cbv-expvar-area%d.png' % (sector, cbv_area))
 		plt.close(fig)
 
 		# Plot all the CBVs:
@@ -216,11 +235,11 @@ if __name__ == '__main__':
 			ax.plot(cbv[:, k], '-')
 			ax.set_title('Basis Vector %d' % (k+1))
 		plt.tight_layout()
-		fig.savefig('plots/sector%02d/cbvs.png' % (sector, ))
+		fig.savefig('plots/sector%02d/cbvs-area%d.png' % (sector, cbv_area))
 		plt.close(fig)
 
 		# Save the CBV to file:
-		np.save('cbv-%d.npy' % cbv_area, cbv)
+		np.save('cbv-sector%02d-%d.npy' % (sector, cbv_area), cbv)
 
 		#---------------------------------------------------------------------------------------------------------
 		# CORRECTING STARS
@@ -235,11 +254,12 @@ if __name__ == '__main__':
 		stars = cursor.fetchall()
 
 		# Load the cbv from file:
-		cbv = CBV('cbv-%d.npy' % cbv_area)
+		cbv = CBV('cbv-sector%02d-%d.npy' % (sector, cbv_area))
 
 		for star in stars:
 			starid = star['starid']
 			time, flux = np.loadtxt(os.path.join('data', 'noisy_by_sectors', 'Star%d-sector%02d.noisy' % (starid, sector)), usecols=(0, 1), unpack=True)
+			time_clean, flux_clean = np.loadtxt(os.path.join('data', 'clean_by_sectors', 'Star%d-sector%02d.clean' % (starid, sector)), usecols=(0, 1), unpack=True)
 			
 			# Fit the CBV to the flux:
 			flux_filter = cbv.fit(flux, Ncbvs=4)
@@ -251,6 +271,7 @@ if __name__ == '__main__':
 			ax1.set_xticks([])
 			ax2 = fig.add_subplot(212)
 			ax2.plot(time, flux/flux_filter-1)
+			ax2.plot(time_clean, flux_clean/nanmedian())
 			ax2.set_xlabel('Time')
 			plt.tight_layout()
 			fig.savefig('plots/sector%02d/star%d.png' % (sector, starid))
