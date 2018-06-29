@@ -11,7 +11,6 @@ import sqlite3
 import matplotlib.pyplot as plt
 import os
 import glob
-from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from bottleneck import replace, allnan, nansum, move_median, nanmedian
 from scipy.optimize import minimize
@@ -48,7 +47,7 @@ class CBV(object):
 		coeffs = np.atleast_1d(coeffs)
 		m = coeffs[-1]
 		for k in range(len(coeffs)-1):
-			m += coeffs[k]*self.cbv[:,k]
+			m += coeffs[k] * self.cbv[:, k]
 		return m
 
 	def _lhood(self, coeffs, flux):
@@ -56,34 +55,44 @@ class CBV(object):
 
 	def fit(self, flux, Ncbvs=2, sigma_clip=4.0, maxiter=3):
 
-		bic = np.zeros(self.cbv.shape[1])
-		loglike = np.zeros(self.cbv.shape[1])
-		for Ncbvs in range(0, self.cbv.shape[1]):
+		# Find the median flux, as it is used for
+		# initial guesses later on:
+		median_flux = nanmedian(flux)
+
+		# Start looping over the number of CBVs to include:
+		bic = np.empty(self.cbv.shape[1]+1, dtype='float64')
+		solutions = []
+		for Ncbvs in range(self.cbv.shape[1]+1):
 
 			# Initial guesses for coefficients:
 			coeffs0 = np.zeros(Ncbvs + 1, dtype='float64')
-			coeffs0[-1] = nanmedian(flux)
+			coeffs0[-1] = median_flux
 
 			iters = 0
-			flux = np.copy(flux)
+			fluxi = np.copy(flux)
 			while iters <= maxiter:
 				iters += 1
 
 				# Do the fit:
-				res = minimize(self._lhood, coeffs0, args=(flux, ), method='Powell')
+				res = minimize(self._lhood, coeffs0, args=(fluxi, ), method='Powell')
 				flux_filter = self.mdl(res.x)
 
 				# Do robust sigma clipping:
-				absdev = np.abs( flux - flux_filter )
+				absdev = np.abs( fluxi - flux_filter )
 				mad = 1.4826*nanmedian(absdev)
-				indx = np.greater(absdev, sigma_clip*mad, where=np.isfinite(flux))
+				indx = np.greater(absdev, sigma_clip*mad, where=np.isfinite(fluxi))
 				if np.any(indx):
-					flux[indx] = np.nan
+					fluxi[indx] = np.nan
 				else:
 					break
 
-			loglike[Ncbvs] = -res.fun/2
-			bic[Ncbvs] = np.log(np.sum(np.isfinite(flux)))*len(coeffs0) + res.fun
+			# Calculate the Bayesian Information Criterion (BIC) and store the solution:
+			bic[Ncbvs] = np.log(np.sum(np.isfinite(fluxi)))*len(coeffs0) + res.fun
+			solutions.append(res)
+
+		# Use the solution which minimizes the BIC:
+		indx = np.argmin(bic)
+		flux_filter = self.mdl(solutions[indx].x)
 
 		#plt.figure()
 		#plt.plot(bic, '.-')
@@ -116,7 +125,6 @@ if __name__ == '__main__':
 	cursor.execute("SELECT DISTINCT cbv_area FROM todolist ORDER BY cbv_area;")
 	cbv_areas = [int(row[0]) for row in cursor.fetchall()]
 	print(cbv_areas)
-	colors = ['r', 'b', 'g', 'y']
 
 	# Loop through the CBV areas:
 	# - or run them in parallel - whatever you like!
@@ -127,8 +135,8 @@ if __name__ == '__main__':
 		#---------------------------------------------------------------------------------------------------------
 
 		print("We are running CBV_AREA=%d" % cbv_area)
-		camera = np.floor(cbv_area/100)
-		print(camera)
+		#camera = np.floor(cbv_area/100)
+		#print(camera)
 
 		# Find the median of the variabilities:
 		# SQLite does not have a median function so we are going to
@@ -139,8 +147,7 @@ if __name__ == '__main__':
 			AND status=0
 			AND cbv_area=?;""", (cbv_area, ))
 		variability = np.array([row[0] for row in cursor.fetchall()], dtype='float64')
-		median_variability = np.median(variability)
-		print(median_variability)
+		median_variability = nanmedian(variability)
 
 		# Plot the distribution of variability for all stars:
 		fig = plt.figure()
@@ -153,18 +160,24 @@ if __name__ == '__main__':
 		plt.close(fig)
 
 		# Get the list of star that we are going to load in the lightcurves for:
-		# We have put a hard limit of a maximum of 10000 targets for now.
+		# We have put a hard limit of a maximum of 20000 targets for now.
 		cursor.execute("""SELECT todolist.starid,mean_flux FROM todolist LEFT JOIN diagnostics ON todolist.priority=diagnostics.priority WHERE
 			datasource='ffi'
 			AND status=0
 			AND cbv_area=?
 			AND variability < ?
-		ORDER BY variability ASC LIMIT 10000;""", (cbv_area, threshold_variability*median_variability))
+		ORDER BY variability ASC LIMIT 20000;""", (cbv_area, threshold_variability*median_variability))
 		stars = cursor.fetchall()
 		
+		# Number of stars returned:
 		Nstars = len(stars)
-		Ntimes = 1315 # We should maybe store this somewhere???
-		print(Nstars)
+
+		# Load the very first timeseries only to find the number of timestamps.
+		# When using FITS files in the future, this could simply be loaded from the header.
+		time = np.loadtxt(os.path.join('data', 'noisy_by_sectors', 'Star%d-sector%02d.noisy' % (stars[0]['starid'], sector)), usecols=(0, ), unpack=True)
+		Ntimes = len(time)
+
+		print("Matrix size: %d x %d" % (Nstars, Ntimes))
 
 		# Make the matrix that will hold all the lightcurves:
 		mat = np.empty((Nstars, Ntimes), dtype='float64')
@@ -210,7 +223,6 @@ if __name__ == '__main__':
 		
 		# Calculate the principle components:
 		replace(mat, np.nan, 0) # Replace NaNs with zero... We should do something better...
-		#mat = StandardScaler(copy=False).fit_transform(mat)
 		pca = PCA(n_components=8)
 		pca.fit(mat)
 
@@ -247,7 +259,8 @@ if __name__ == '__main__':
 
 		print("CORRECTING STARS...")
 
-		cursor.execute("""SELECT * FROM todolist WHERE
+		# Query for all stars, no matter what variability and so on
+		cursor.execute("""SELECT starid FROM todolist WHERE
 			datasource='ffi'
 			AND cbv_area=?
 			AND status=0;""", (cbv_area, ))
