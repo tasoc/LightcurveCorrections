@@ -271,7 +271,7 @@ if __name__ == '__main__':
 			ax1.set_xticks([])
 			ax2 = fig.add_subplot(212)
 			ax2.plot(time, flux/flux_filter-1)
-			ax2.plot(time_clean, flux_clean/nanmedian())
+			ax2.plot(time_clean, flux_clean/nanmedian(flux_clean)-1)
 			ax2.set_xlabel('Time')
 			plt.tight_layout()
 			fig.savefig('plots/sector%02d/star%d.png' % (sector, starid))

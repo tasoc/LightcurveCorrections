@@ -73,7 +73,7 @@ if __name__ == '__main__':
 				print('Star%d-sector%02d.noisy' % (starid, s))
 
 				np.savetxt(os.path.join('data', 'noisy_by_sectors', 'Star%d-sector%02d.noisy' % (starid, s)), data_sector)
-				np.savetxt(os.path.join('data', 'clean_by_sectors', 'Star%d-sector%02d.noisy' % (starid, s)), data_clean[indx, :])
+				np.savetxt(os.path.join('data', 'clean_by_sectors', 'Star%d-sector%02d.clean' % (starid, s)), data_clean[indx, :])
 
 				conn = sqlite3.connect('todo-sector%02d.sqlite' % s)
 				cursor = conn.cursor()
