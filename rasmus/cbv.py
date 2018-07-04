@@ -12,11 +12,13 @@ import matplotlib.pyplot as plt
 import os
 import glob
 from sklearn.decomposition import PCA
-from bottleneck import replace, allnan, nansum, move_median, nanmedian
+from bottleneck import allnan, nansum, move_median, nanmedian, nanstd
 from scipy.optimize import minimize
 from scipy.stats import pearsonr
+from scipy.interpolate import pchip_interpolate
 import itertools
 #from photometry.utilities import move_median_central
+from tqdm import tqdm
 
 #------------------------------------------------------------------------------
 def _move_median_central_1d(x, width_points):
@@ -34,7 +36,7 @@ def move_median_central(x, width_points, axis=0):
 #------------------------------------------------------------------------------
 def pearson(x, y):
 	indx = np.isfinite(x) & np.isfinite(y)
-	r, _ = pearsonr(x[indx], y[indx]) # Second outout (p-value) is not used
+	r, _ = pearsonr(x[indx], y[indx]) # Second output (p-value) is not used
 	return r
 
 #------------------------------------------------------------------------------
@@ -45,7 +47,8 @@ class CBV(object):
 
 	def mdl(self, coeffs):
 		coeffs = np.atleast_1d(coeffs)
-		m = coeffs[-1]
+		m = np.empty(self.cbv.shape[0], dtype='float64')
+		m.fill(coeffs[-1])
 		for k in range(len(coeffs)-1):
 			m += coeffs[k] * self.cbv[:, k]
 		return m
@@ -108,7 +111,7 @@ if __name__ == '__main__':
 
 	# Other settings:
 	threshold_variability = 1.3
-	threshold_correlation = 1.0
+	threshold_correlation = 0.5
 
 	# Remove old plots:
 	os.makedirs("plots/sector%02d/" % sector, exist_ok=True)
@@ -120,7 +123,7 @@ if __name__ == '__main__':
 	conn = sqlite3.connect(filepath_todo)
 	conn.row_factory = sqlite3.Row
 	cursor = conn.cursor()
-	
+
 	# Get list of CBV areas:
 	cursor.execute("SELECT DISTINCT cbv_area FROM todolist ORDER BY cbv_area;")
 	cbv_areas = [int(row[0]) for row in cursor.fetchall()]
@@ -135,94 +138,136 @@ if __name__ == '__main__':
 		#---------------------------------------------------------------------------------------------------------
 
 		print("We are running CBV_AREA=%d" % cbv_area)
-		#camera = np.floor(cbv_area/100)
+		camera = np.floor(cbv_area/100)
 		#print(camera)
 
-		# Find the median of the variabilities:
-		# SQLite does not have a median function so we are going to
-		# load all the values into an array and make Python do the
-		# heavy lifting.
-		cursor.execute("""SELECT variability FROM todolist LEFT JOIN diagnostics ON todolist.priority=diagnostics.priority WHERE
-			datasource='ffi'
-			AND status=0
-			AND cbv_area=?;""", (cbv_area, ))
-		variability = np.array([row[0] for row in cursor.fetchall()], dtype='float64')
-		median_variability = nanmedian(variability)
+		tmpfile = 'mat-sector%02d-%d.npz' % (sector, cbv_area)
+		if os.path.exists(tmpfile):
+			print("Loading existing file...")
+			data = np.load(tmpfile)
+			mat = data['mat']
+			priorities = data['priorities']
+			stds = data['stds']
 
-		# Plot the distribution of variability for all stars:
-		fig = plt.figure()
-		ax = fig.add_subplot(111)
-		ax.hist(variability/median_variability, bins=np.logspace(np.log10(0.1), np.log10(1000.0), 50))
-		ax.axvline(threshold_variability, color='r')
-		ax.set_xscale('log')
-		ax.set_xlabel('Variability')
-		fig.savefig('plots/sector%02d/variability-area%d.png' % (sector, cbv_area))
-		plt.close(fig)
+		else:
+			# Find the median of the variabilities:
+			# SQLite does not have a median function so we are going to
+			# load all the values into an array and make Python do the
+			# heavy lifting.
+			cursor.execute("""SELECT variability FROM todolist LEFT JOIN diagnostics ON todolist.priority=diagnostics.priority WHERE
+				datasource='ffi'
+				AND status=0
+				AND CAST(cbv_area/100 AS INT)=?;""", (camera, ))
+			variability = np.array([row[0] for row in cursor.fetchall()], dtype='float64')
+			median_variability = nanmedian(variability)
 
-		# Get the list of star that we are going to load in the lightcurves for:
-		# We have put a hard limit of a maximum of 20000 targets for now.
-		cursor.execute("""SELECT todolist.starid,mean_flux FROM todolist LEFT JOIN diagnostics ON todolist.priority=diagnostics.priority WHERE
-			datasource='ffi'
-			AND status=0
-			AND cbv_area=?
-			AND variability < ?
-		ORDER BY variability ASC LIMIT 20000;""", (cbv_area, threshold_variability*median_variability))
-		stars = cursor.fetchall()
-		
-		# Number of stars returned:
-		Nstars = len(stars)
+			# Plot the distribution of variability for all stars:
+			fig = plt.figure()
+			ax = fig.add_subplot(111)
+			ax.hist(variability/median_variability, bins=np.logspace(np.log10(0.1), np.log10(1000.0), 50))
+			ax.axvline(threshold_variability, color='r')
+			ax.set_xscale('log')
+			ax.set_xlabel('Variability')
+			fig.savefig('plots/sector%02d/variability-area%d.png' % (sector, cbv_area))
+			plt.close(fig)
 
-		# Load the very first timeseries only to find the number of timestamps.
-		# When using FITS files in the future, this could simply be loaded from the header.
-		time = np.loadtxt(os.path.join('data', 'noisy_by_sectors', 'Star%d-sector%02d.noisy' % (stars[0]['starid'], sector)), usecols=(0, ), unpack=True)
-		Ntimes = len(time)
+			# Get the list of star that we are going to load in the lightcurves for:
+			# We have put a hard limit of a maximum of 20000 targets for now.
+			cursor.execute("""SELECT todolist.starid,todolist.priority,mean_flux,variance FROM todolist LEFT JOIN diagnostics ON todolist.priority=diagnostics.priority WHERE
+				datasource='ffi'
+				AND status=0
+				AND CAST(cbv_area/100 AS INT)=?
+				AND variability < ?
+			ORDER BY variability ASC LIMIT 30000;""", (camera, threshold_variability*median_variability))
+			stars = cursor.fetchall()
 
-		print("Matrix size: %d x %d" % (Nstars, Ntimes))
+			# Number of stars returned:
+			Nstars = len(stars)
 
-		# Make the matrix that will hold all the lightcurves:
-		mat = np.empty((Nstars, Ntimes), dtype='float64')
-		mat.fill(np.nan)
-		for k, star in enumerate(stars):
-			starid = star['starid']
+			# Load the very first timeseries only to find the number of timestamps.
+			# When using FITS files in the future, this could simply be loaded from the header.
+			time = np.loadtxt(os.path.join('data', 'noisy_by_sectors', 'Star%d-sector%02d.noisy' % (stars[0]['starid'], sector)), usecols=(0, ), unpack=True)
+			Ntimes = len(time)
 
-			flux = np.loadtxt(os.path.join('data', 'noisy_by_sectors', 'Star%d-sector%02d.noisy' % (starid, sector)), usecols=(1, ), unpack=True)
-			#print(flux.shape)
+			print("Matrix size: %d x %d" % (Nstars, Ntimes))
 
-			# Normalize the data and store it in the rows of the matrix:
-			mat[k, :] = flux / star['mean_flux'] - 1.0			
+			# Make the matrix that will hold all the lightcurves:
+			print("Loading in lightcurves...")
+			mat = np.empty((Nstars, Ntimes), dtype='float64')
+			mat.fill(np.nan)
+			stds = np.empty(Nstars, dtype='float64')
+			priorities = np.empty(Nstars, dtype='int64')
+			for k, star in tqdm(enumerate(stars), total=Nstars):
+				priorities[k] = star['priority']
+				starid = star['starid']
 
-		# Calculate the correlation matrix between all lightcurves:
-		correlations = np.empty((Nstars, Nstars), dtype='float64')
-		np.fill_diagonal(correlations, np.nan) # Put NaNs on the diagonal
-		for i, j in itertools.combinations(range(Nstars), 2):
-			r = pearson(mat[i, :], mat[j, :])
-			correlations[i,j] = correlations[j,i] = np.abs(r)
+				flux = np.loadtxt(os.path.join('data', 'noisy_by_sectors', 'Star%d-sector%02d.noisy' % (starid, sector)), usecols=(1, ), unpack=True)
+				#print(flux.shape)
 
-		# Find the median absolute correlation between each lightcurve and all other lightcurves:
-		c = nanmedian(correlations, axis=0)
-		
-		# Indicies that would sort the lightcurves by correlations in descending order:
-		indx = np.argsort(c)[::-1]
+				# Normalize the data and store it in the rows of the matrix:
+				mat[k, :] = flux / star['mean_flux'] - 1.0
+				stds[k] = np.sqrt(star['variance'])
 
-		# Only keep the top 50% of the lightcurves that are most correlated:
-		mat = mat[indx[:int(threshold_correlation*Nstars)], :]
+			# Only start calculating correlations if we are actually filtering using them:
+			if threshold_correlation < 1.0:
+				file_correlations = 'correlations-sector%02d-%d.npy' % (sector, cbv_area)
+				if os.path.exists(file_correlations):
+					correlations = np.load(file_correlations)
+				else:
+					# Calculate the correlation matrix between all lightcurves:
+					print("Calculating correlations...")
+					correlations = np.empty((Nstars, Nstars), dtype='float64')
+					np.fill_diagonal(correlations, np.nan) # Put NaNs on the diagonal
+					for i, j in tqdm(itertools.combinations(range(Nstars), 2), total=0.5*Nstars**2-Nstars):
+						r = pearson(mat[i, :]/stds[i], mat[j, :]/stds[j])
+						correlations[i,j] = correlations[j,i] = np.abs(r)
+
+					np.save(file_correlations, correlations)
+
+				# Find the median absolute correlation between each lightcurve and all other lightcurves:
+				c = nanmedian(correlations, axis=0)
+
+				# Indicies that would sort the lightcurves by correlations in descending order:
+				indx = np.argsort(c)[::-1]
+				indx = indx[:int(threshold_correlation*Nstars)]
+
+				# Only keep the top 50% of the lightcurves that are most correlated:
+				priorities = priorities[indx]
+				mat = mat[indx, :]
+
+				# Clean up a bit:
+				del correlations, c, indx
+
+			# Save something for debugging:
+			np.savez('mat-sector%02d-%d.npz' % (sector, cbv_area), mat=mat, priorities=priorities, stds=stds)
 
 		# Print the final shape of the matrix:
-		print(mat.shape)
+		print("Matrix size: %d x %d" % mat.shape)
 
 		# Simple low-pass filter of the individual targets:
-		#mat = move_median_central(mat, 48, axis=1)	
+		#mat = move_median_central(mat, 48, axis=1)
 
 		# Find columns where all stars have NaNs and remove them:
 		indx_nancol = allnan(mat, axis=0)
+		Ntimes = mat.shape[1]
 		mat = mat[:, ~indx_nancol]
 
+		cadenceno = np.arange(mat.shape[1])
+
 		# TODO: Is this even needed? Or should it be done earlier?
-		for k in range(mat.shape[0]):
-			mat[k, :] /= np.nanstd(mat[k, :])
-		
+		print("Gap-filling lightcurves...")
+		for k in tqdm(range(mat.shape[0]), total=mat.shape[0]):
+
+			mat[k, :] /= stds[k]
+
+			# Fill out missing values by interpolating the lightcurve:
+			indx = np.isfinite(mat[k, :])
+			mat[k, ~indx] = pchip_interpolate(cadenceno[indx], mat[k, indx], cadenceno[~indx])
+
+		#replace(mat, np.nan, 0) # Replace NaNs with zero... We should do something better...
+
 		# Calculate the principle components:
-		replace(mat, np.nan, 0) # Replace NaNs with zero... We should do something better...
+		print("Doing Principle Component Analysis...")
 		pca = PCA(n_components=8)
 		pca.fit(mat)
 
@@ -271,9 +316,11 @@ if __name__ == '__main__':
 
 		for star in stars:
 			starid = star['starid']
+
+
 			time, flux = np.loadtxt(os.path.join('data', 'noisy_by_sectors', 'Star%d-sector%02d.noisy' % (starid, sector)), usecols=(0, 1), unpack=True)
 			time_clean, flux_clean = np.loadtxt(os.path.join('data', 'clean_by_sectors', 'Star%d-sector%02d.clean' % (starid, sector)), usecols=(0, 1), unpack=True)
-			
+
 			# Fit the CBV to the flux:
 			flux_filter = cbv.fit(flux, Ncbvs=4)
 
@@ -284,7 +331,7 @@ if __name__ == '__main__':
 			ax1.set_xticks([])
 			ax2 = fig.add_subplot(212)
 			ax2.plot(time, flux/flux_filter-1)
-			ax2.plot(time_clean, flux_clean/nanmedian(flux_clean)-1)
+			ax2.plot(time_clean, flux_clean/nanmedian(flux_clean)-1, alpha=0.5)
 			ax2.set_xlabel('Time')
 			plt.tight_layout()
 			fig.savefig('plots/sector%02d/star%d.png' % (sector, starid))

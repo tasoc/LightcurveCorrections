@@ -10,15 +10,23 @@ import six
 import numpy as np
 import os
 from bottleneck import nanmedian, nansum
-import matplotlib.pyplot as plt
+import sys
 
 if __name__ == '__main__':
 	# Make sure some directories exist:
 	os.makedirs('data/noisy_by_sectors', exist_ok=True)
 	os.makedirs('data/clean_by_sectors', exist_ok=True)
 
+	progress = 0
+	if os.path.exists('progress.txt'):
+		with open('progress.txt', 'r') as fid:
+			progress = int(fid.readline())
+
+	print(progress)
+
 	pri = {}
-	for starlist_file in ('data/Data_Batch_TDA.txt', 'data/Data_Batch_TDA_solar.txt'):
+	starid = 0
+	for starlist_file in ('data/Data_Batch_TDA.txt', 'data/Data_Batch_TDA_solar.txt', 'data/Data_Batch_TDA_correction.txt'):
 
 		starlist = np.genfromtxt(starlist_file, delimiter=',', dtype=None)
 
@@ -26,25 +34,27 @@ if __name__ == '__main__':
 			print(star)
 
 			# Don't trust Mikkel!
-			#starname = star[0] 
+			#starname = star[0]
 			#if not isinstance(starname, six.string_types): starname = starname.decode("utf-8") # For Python 3
 			#starid = int(starname[4:])
-			starid = k+1
+			starid = starid+1
+
+			if starid <= progress:
+				continue
 
 			startype = star[-1]
 			if not isinstance(startype, six.string_types): startype = startype.decode("utf-8") # For Python 3
 
 			tmag = star[1]
-			# Don't trust Mikkel!
-			#if star[2] == 1800:
-			#	datasource = 'ffi'
-			#else:
-			#	datasource = 'tpf'
 
 			if starid <= 15000:
 				file_to_load = os.path.join('noisy_files_TDA', 'Star%d.noisy' % starid)
-			else:
+			elif starid <= 17001:
 				file_to_load = os.path.join('noisy_files_TDA_solar', 'Star%d.noisy' % (starid-15001))
+			elif starid <= 37001:
+				file_to_load = os.path.join('noisy_files_TDA_correction', 'Star%d.noisy' % (starid-17001))
+			else:
+				raise Exception("Here there be dragons!")
 
 			data = np.loadtxt(os.path.join('data', file_to_load))
 			data_clean = np.loadtxt(os.path.join('data', file_to_load.replace('noisy', 'clean')))
@@ -53,6 +63,10 @@ if __name__ == '__main__':
 			sectors = [int(s) for s in np.unique(sector)]
 
 			# Just because Mikkel can not be trusted:
+			#if star[2] == 1800:
+			#	datasource = 'ffi'
+			#else:
+			#	datasource = 'tpf'
 			if (data[1,0] - data[0,0])*86400 > 1000:
 				datasource = 'ffi'
 			else:
@@ -70,19 +84,14 @@ if __name__ == '__main__':
 				camera = 4
 
 			for s in sectors:
-				if s not in pri: pri[s] = 0
-				pri[s] += 1
 				print('Star%d-sector%02d.noisy' % (starid, s))
-
-				# If we have already done this file, skip it so we can speed things up a bit:
-				if os.path.exists(os.path.join('data', 'noisy_by_sectors', 'Star%d-sector%02d.noisy' % (starid, s))):
-					continue
 
 				indx = (sector == s)
 				data_sector = data[indx, :]
 
 				# Save files cut up into sectors:
-				np.savetxt(os.path.join('data', 'noisy_by_sectors', 'Star%d-sector%02d.noisy' % (starid, s)), data_sector)
+				lightcurve = 'Star%d-sector%02d.noisy' % (starid, s)
+				np.savetxt(os.path.join('data', 'noisy_by_sectors', lightcurve), data_sector)
 				np.savetxt(os.path.join('data', 'clean_by_sectors', 'Star%d-sector%02d.clean' % (starid, s)), data_clean[indx, :])
 
 				sqlite_file = 'todo-sector%02d.sqlite' % s
@@ -99,7 +108,8 @@ if __name__ == '__main__':
 						method TEXT DEFAULT NULL,
 						tmag REAL,
 						status INT DEFAULT NULL,
-						cbv_area INT NOT NULL
+						cbv_area INT NOT NULL,
+						lightcurve TEXT DEFAULT NULL
 					);""")
 
 					cursor.execute("""CREATE TABLE diagnostics (
@@ -124,10 +134,16 @@ if __name__ == '__main__':
 					cursor.execute("CREATE INDEX starid_idx ON todolist (starid);")
 					cursor.execute("CREATE INDEX variability_idx ON diagnostics (variability);")
 					conn.commit()
+
+					pri[s] = 0
 				else:
 					conn = sqlite3.connect(sqlite_file)
 					cursor = conn.cursor()
+					if s not in pri:
+						cursor.execute("SELECT MAX(priority) FROM todolist;")
+						pri[s] = int(cursor.fetchone()[0])
 
+				pri[s] += 1
 				mean_flux = nanmedian(data_sector[:,1])
 				variance = nansum((data_sector[:,1] - mean_flux)**2) / (data_sector.shape[0] - 1)
 
@@ -158,14 +174,15 @@ if __name__ == '__main__':
 				#	plt.plot(data[:,0], data[:,1])
 				#	plt.show()
 
-				cursor.execute("INSERT INTO todolist (priority,starid,tmag,datasource,status,camera,ccd,cbv_area) VALUES (?,?,?,?,0,?,?,?);", (
+				cursor.execute("INSERT INTO todolist (priority,starid,tmag,datasource,status,camera,ccd,cbv_area,lightcurve) VALUES (?,?,?,?,0,?,?,?,?);", (
 					pri[s],
 					starid,
 					tmag,
 					datasource,
 					camera,
 					1,
-					cbv_area
+					cbv_area,
+					lightcurve
 				))
 				cursor.execute("INSERT INTO diagnostics (priority,starid,elaptime,mean_flux,variance,variability,mask_size,pos_row,pos_column,contamination,stamp_resizes) VALUES (?,?,?,?,?,?,?,?,?,0.0,0);", (
 					pri[s],
@@ -182,5 +199,9 @@ if __name__ == '__main__':
 				conn.commit()
 				cursor.close()
 				conn.close()
+
+			# Write progress to file:
+			with open('progress.txt', 'w') as fid:
+				fid.write(str(starid))
 
 	print("DONE.")
