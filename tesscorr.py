@@ -29,27 +29,21 @@ def _try_correction(CorrClass, *args, **kwargs):
 		with CorrClass(*args, **kwargs) as corr:
 			corr.correction()
 
-			if corr.status in ():
-				# corrected lightcurves 
-				# TODO: proper status code -- in (STATUS.OK_LC), etc.
+			if corr.status in (STATUS.OK, STATUS.WARNING):
 				corr.save_lightcurve()
-			elif corr.status in ():
-				# CBV created
-				# TODO: proper status code -- in (STATUS.OK_CBV), etc.
-				corr.save_cbv()
 
 	except (KeyboardInterrupt, SystemExit):
 		logger.info("Stopped by user or system")
 		try:
-			pho._status = STATUS.ABORT
+			corr._status = STATUS.ABORT
 		except:
 			pass
 	except:
 		logger.exception("Something happened")
 		tb = traceback.format_exc().strip()
 		try:
-			pho._status = STATUS.ERROR
-			pho.report_details(error=tb)
+			corr._status = STATUS.ERROR
+			corr.report_details(error=tb)
 		except:
 			pass
 
@@ -75,7 +69,8 @@ def tesscorr(method=None, *args, **kwargs):
 	logger = logging.getLogger(__name__)
 
 	if method is None:
-		# assume general, "crude" correction
+		# assume general, coarse correction
+		corr = _try_correction(CoarseCorrection, *args, **kwargs)
 
 	elif method == 'classification':
 		# call out to a 'ClassifiedCorrection' class that will handle the various special cases?
