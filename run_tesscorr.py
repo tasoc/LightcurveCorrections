@@ -22,7 +22,7 @@ import logging
 import functools
 
 #------------------------------------------------------------------------------
-    if __name__ == '__main__':
+if __name__ == '__main__':
     # list of files to run through
     fitsfiles = [] 
 

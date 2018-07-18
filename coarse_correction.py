@@ -16,9 +16,6 @@ class CoarseCorrection(BaseCorrection):
         # NOTE: placeholder
         super().__init__()
 
-        # create instances? one for cotrend, one for detrend, etc.?
-        self.cotrend = CLC(self.camera, self.ccd)
-
     def do_correction(self):
         """ Coarse Correction """ 
 
@@ -35,45 +32,7 @@ class CoarseCorrection(BaseCorrection):
         ###
         # NOTE: Placeholder for coarse classification logic
         #
-        # There may be an argument for using a filter (e.g., on highly variable targets)
-        # here and running corrections differently even on the coarse level.
-        # That filter probably belongs here, where we can direct the order/choice of 
-        # correction calls below.
-        #
-        # Example: 
-        # if method is None and self.variability < threshold:
-        #    do_cotrend()
-        #    do_detrend()
-        # elif self.variability > threshold:
-        #    do_detrend()   # no cotrend because the CBV's don't improve EB's, w/e
         #
         ###
 
-        # NOTE: Placeholder
-        # TODO: Call the funtions!
-
         return STATUS.OK
-
-    def do_cotrend():
-        """
-        Use the CBVs to fit against the given target and remove systematics 
-
-        TODO: implement this
-        """
-
-        #
-        raise NotImplementedError
-    
-    def do_detrend():
-        """
-        Use Derek's detrending fit 
-
-        TODO: implement this
-        TODO: decide how many stars to load in for the ensemble attempt - do try something along the lines of:
-            "SELECT * FROM todolist LEFT JOIN diagnostics ON todolist.priority=diagnositics.priority WHERE ((list of parameters goes here))"
-
-            At least one of those parameters needs to be a sphere_distance() from the target that's being detrended, and
-            we probably want a list of at least 100 in case any don't match with the later checks
-        """
-
-        #
