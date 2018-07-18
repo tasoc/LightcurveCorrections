@@ -31,11 +31,32 @@ def _try_correction(CorrClass, *args, **kwargs):
 
 			if corr.status in ():
 				# corrected lightcurves 
+				# TODO: proper status code -- in (STATUS.OK_LC), etc.
 				corr.save_lightcurve()
 			elif corr.status in ():
 				# CBV created
+				# TODO: proper status code -- in (STATUS.OK_CBV), etc.
 				corr.save_cbv()
 
+	except (KeyboardInterrupt, SystemExit):
+		logger.info("Stopped by user or system")
+		try:
+			pho._status = STATUS.ABORT
+		except:
+			pass
+	except:
+		logger.exception("Something happened")
+		tb = traceback.format_exc().strip()
+		try:
+			pho._status = STATUS.ERROR
+			pho.report_details(error=tb)
+		except:
+			pass
+
+    try:
+		return corr
+	except UnboundLocalError:
+		return _CorrErrorDummy(*args, **kwargs)
 #------------------------------------------------------------------------------
 def tesscorr(method=None, *args, **kwargs):
 	"""
