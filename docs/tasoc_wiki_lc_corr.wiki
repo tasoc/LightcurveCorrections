@@ -1,0 +1,57 @@
+(:title Lightcurve Correction:)
+
+
+
+
+!! Ensemble Fit Corrections
+%rfloat text-align=center margin-top=5px margin-right=25px margin-bottom=25px margin-left=25px height=900px% Attach:fit_view_wiki.png |''Figure 1: Flow chart illustrating ensemble fitting overview''
+
+An initial, coarse correction lightcurve will be produced and provided alongside each lightcurve extracted from the raw photometry. The ensemble correction method used is detailed [[https://tasoc.dk/download_conference.php?file=TASC4/posters/P53.pdf|here]]
+
+The resulting ensemble fit curve for each target will also be provided for reference. The lightcurve correction code is available on [[https://github.com/tasoc/LightcurveCorrections|github]]
+
+An overview of the ensemble fitting is illustrated in the flowchart. Results of initial testing on simulated data are shown below.
+
+[[<<]]
+%width=900px%Attach:testing_wiki.png
+''Figure 2: Results of testing the ensemble lightcurve corrections (orange) on simulated data (blue).''
+\\\
+\\\
+
+!! Area and CCD Cotrending Basis Vectors
+In keeping with the Kepler lightcurve correction methods, CBVs will be provided for each CCD after the raw photometry targets have been processed. Additional area-defined CBVs will be provided for each CCD to reduce unintended fitting biases across the larger detector and attempt to capture localized focus effects.
+\\\
+
+!! Classification-Driven and "Final" Corrections
+Additional lightcurve corrections and data products may be provided based on working group feedback and requirements for automatic stellar classification.
+\\\
+
+!! Tasks
+(:table class=tablesorter:)
+(:head:) Task
+(:head:) Description
+(:head:) Status
+(:head:) People
+
+(:cellnr rowspan=2:) Algorithms
+
+(:cell:) Ensemble fit - Develop code for ensemble fittng for each target lightcurve
+(:cell:) Complete
+(:cell:) Derek Buzasi
+
+(:cellnr:) CBV generation - Develop code for CBV generation for CCDs and areas
+(:cell:) Complete
+(:cell:) Rasmus Handberg
+
+(:cellnr:) Testing
+(:cell:) Test corrections code on simulated data
+(:cell:) In Progress
+(:cell:) 
+
+(:cellnr:) Integration
+(:cell:) Integrate ensemble fitting and CBV generation code into T'DA photometry pipeline.
+(:cell:) In Progress 
+(:cell:) Lindsey Carboneau \\
+Oliver Hall
+
+(:tableend:)
