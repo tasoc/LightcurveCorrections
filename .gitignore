@@ -90,6 +90,9 @@ lib64*
 sys
 tqdm.1
 
+# virtualenv on Windows
+Scripts/
+
 # Spyder project settings
 .spyderproject
 
