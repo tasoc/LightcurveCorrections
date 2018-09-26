@@ -1,4 +1,6 @@
+six
 numpy
-scipy >= 0.16
-matplotlib >= 2.1.2
-astropy >= 2.0, <3.0
+scipy
+matplotlib
+astropy
+Bottleneck
