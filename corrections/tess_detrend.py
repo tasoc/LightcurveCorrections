@@ -2,7 +2,7 @@
 """
 Created on Thu Mar 29 09:58:55 2018
 
-@author: derek
+.. code author :: Derek Buzasi
 """
 
 import numpy as np

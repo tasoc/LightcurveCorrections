@@ -5,6 +5,8 @@ The basic correction class for the TASOC Photomety pipeline
 All other specific correction classes will inherit from BaseCorrection.
 Structure from `BasePhotometry` by Rasmus Handberg <rasmush@phys.au.dk>
 
+.. code author :: Lindsey Carboneau <lmcarboneau@gmail.com>
+.. code author :: Derek Buzasi <dbuzasi@fgcu.edu>
 """
 
 #----- Imports go here --------------------------------------------------------
