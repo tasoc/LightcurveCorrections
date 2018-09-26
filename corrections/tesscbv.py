@@ -8,6 +8,7 @@ following convention:
 tessphot.py == TESS photometry --> tesscbv.py == TESS CBV (Cotrending Basis Vectors)
 Structure inspired by `tessphot` by Rasmus Handberg <rasmush@phys.au.dk>
 
+.. code author:: Lindsey Carboneau
 """
 
 from __future__ import with_statement, print_function, absolute_import

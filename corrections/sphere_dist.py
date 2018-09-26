@@ -2,7 +2,7 @@
 """
 Created on Wed Mar 28 17:05:22 2018
 
-@author: derek
+.. code author :: Derek Buzasi
 """
 
 def sphere_dist(lat1, lon1, lat2, lon2):

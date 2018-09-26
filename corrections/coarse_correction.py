@@ -5,6 +5,8 @@ TODO: important info goes here
 
 Structure based on `photometry.py` by Rasmus Handberg <rasmush@phys.au.dk>
 
+.. code author :: Lindsey Carboneau <lmcarboneau@gmail.com>
+
 """
 
 import numpy as np 
