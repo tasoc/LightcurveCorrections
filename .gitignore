@@ -87,6 +87,8 @@ bin/
 share/
 pyvenv.cfg
 lib64*
+sys
+tqdm.1
 
 # Spyder project settings
 .spyderproject
