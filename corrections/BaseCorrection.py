@@ -13,6 +13,7 @@ Structure from `BasePhotometry` by Rasmus Handberg <rasmush@phys.au.dk>
 import logging
 import os
 import sqlite3
+import enum
 
 @enum.unique
 class STATUS(enum.Enum):
@@ -109,7 +110,7 @@ class BaseCorrection(object):
             raise Exception("STATUS was not set by do_corrections")
 
         if self._status in (STATUS.OK, STATUS.WARNING):
-            self._details[] = self.lightcurve[]
-            self._details[] = self.lightcurve[]
-            self._details[] = self.lightcurve[]
+            self._details = self.lightcurve
+            #self._details[] = self.lightcurve[]
+            #self._details[] = self.lightcurve[]
             # other outputs, including some conditions

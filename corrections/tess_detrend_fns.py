@@ -10,7 +10,7 @@ Global Parameters:
 
 Created on Thu Mar 29 09:58:55 2018
 
-.. codeauthor:: derek
+.. codeauthor:: Derek Buzasi
 .. codeauthor:: Oliver J. Hall
 .. codeauthor:: Lindsey Carboneau
 .. codeauthor:: Fillipe Pereira
