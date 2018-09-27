@@ -98,3 +98,10 @@ class TaskManager(object):
 
 	def __enter__(self):
 		return self
+
+    def start_task(self, task):
+        """
+		Mark a task as STARTED in the TODO-list.
+		"""
+		self.cursor.execute("UPDATE todolist SET status=6 WHERE priority=?;", (taskid,))
+		self.conn.commit()
