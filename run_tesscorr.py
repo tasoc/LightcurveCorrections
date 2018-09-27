@@ -34,7 +34,7 @@ if __name__ == '__main__':
     parser.add_argument('-d', '--debug', help='Print debug messages.', action='store_true')
     parser.add_argument('-q', '--quiet', help='Only report warnings and errors.', action='store_true')
     parser.add_argument('-f', '--format', help='use alternate output format, default tab-delimited', nargs='?', const='latex', default='tab')	
-            # probably don't want a latex default, but it's an okay placeholder for now
+            # NOTE: probably don't want a latex default, but it's an okay placeholder for now
     args = parser.parse_args()
 
     # Make sure appropriate settings are supplied, or that defaults are acceptable (print/log)
@@ -49,17 +49,17 @@ if __name__ == '__main__':
     # Setup logging 
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     console = logging.StreamHandler()
-	console.setFormatter(formatter)
-	logger = logging.getLogger(__name__)
-	logger.addHandler(console)
-	logger.setLevel(logging_level)
+    console.setFormatter(formatter)
+    logger = logging.getLogger(__name__)
+    logger.addHandler(console)
+    logger.setLevel(logging_level)
     logger_parent = logging.getLogger('correction')
-	logger_parent.addHandler(console)
-	logger_parent.setLevel(logging_level)
+    logger_parent.addHandler(console)
+    logger_parent.setLevel(logging_level)
 
     # run_tessphot uses environment variables to set in/out folders, can use for defaults
-    test_folder = os.path.abspath(os.path.join(os.path.dirname(__file__), 'test', 'input'))
-    if args.test:
+    test_folder = os.path.abspath(os.path.join(os.path.dirname(__file__), 'input'))
+    if args.input:
         input_foler = test_folder
     else:
         input_folder = os.environ.get('TESSCORR_INPUT', test_folder)
@@ -72,6 +72,16 @@ if __name__ == '__main__':
     ###### TODO: figure out what that means - how does functools.partial() work? ########
 
     # Run the program 
-    
+    with TaskManager(input_folder) as tm:
+        # NOTE: photometry can run on single targets, some detrending can too; photometry's option is:
+        #  if args.starid is not None:
+        #      task = tm.get_task(starid=args.starid)
+        # would need some elif/else statement to follow
+        task = tm.get_task()
+        del task['priority']
+        # corr = f(**task) # NOTE: see TODO above
 
-    # Write out results
+    # Write out results?
+	if not args.quiet:
+		print("=======================")
+		print("STATUS: {0}".format(pho.status.name))
