@@ -25,11 +25,11 @@ import sqlite3
 import sys
 from tqdm import tqdm
 from operator import add
+from sphere_dist import sphere_dist
 from copy import deepcopy
 from time import sleep
 
 from star import Star
-
 
 #set up output directory
 if not os.path.isdir("toutput"):
@@ -268,16 +268,20 @@ def get_ensemble_correction(ifile, star_names, star_array, eclat, eclon):
         influx0 = influx;
 
     #initialize bin size in days. We will fit the ensemble with splines
-    bin_size = 2.0
-    for ib in range(7):
-        gx = np.arange(time_start-.5*bin_size,time_end+bin_size,bin_size)
-        # bidx  = np.digitize(full_time,gx)
-        bidx = np.digitize(temp_time, gx)
+    bin_size = 4.0
+    for ib in range(6):
+        #decrease bin size and bin data
+        clip_c = 6 - ib*0.75
+        gx = np.arange(time_start-0.5*bin_size,time_end+bin_size,bin_size)
+        #bidx  = np.digitize(full_time,gx)
+        bidx  = np.digitize(temp_time,gx)
         bidx = bidx-1
-        # n, bin_edges = np.histogram(full_time,gx) #bin data
-        n, bin_edges = np.histogram(temp_time, gx) #bin data
+        #n, bin_edges = np.histogram(full_time,gx) #bin data
+        n, bin_edges = np.histogram(temp_time,gx) #bin data
         #if there are too few points in the least-populated bin after the first couple of iterations, break out
         #and stop decreasing the size of the bins
+        #if np.nanmin(n) < 10 and ib > 2:
+        #    break
         ttflux = []
         ttweight = []
         ttime = []
@@ -291,17 +295,14 @@ def get_ensemble_correction(ifile, star_names, star_array, eclat, eclon):
         #clean up any NaNs
         ttime = np.asarray(ttime)
         ttflux = np.asarray(ttflux)
-
         w1 = ttime[~np.isnan(ttflux)]
         w2 = ttflux[~np.isnan(ttflux)]
-
-        # pp = scipy.interpolate.splrep(w1,w2,k=3) #interpolate a spline across the bins
 
         counter = len(ttime)
         while counter > 0:
             pp = scipy.interpolate.pchip(w1,w2)
             diff1 = np.divide(temp_flux,temp_weight)-pp(temp_time)
-            sdiff = 4*np.nanstd(diff1)
+            sdiff = clip_c*np.nanstd(diff1)
             counter = len(diff1[np.abs(diff1)>sdiff])
             temp_time = temp_time[np.abs(diff1)<sdiff]
             temp_flux = temp_flux[np.abs(diff1)<sdiff]
@@ -351,7 +352,7 @@ def get_ensemble_correction(ifile, star_names, star_array, eclat, eclon):
             influx = influx[bidx==iseg]
             intime = intime[bidx==iseg]
 
-            # fun = lambda x: np.sum(np.square(np.divide(influx,np.median(influx))-x*scipy.interpolate.splev(intime,pp)))
+            #fun = lambda x: np.sum(np.square(np.divide(influx,np.median(influx))-x*scipy.interpolate.splev(intime,pp)))
             fun = lambda x: np.sum(np.square(np.divide(influx,np.median(influx))-x*pp(intime)))
             tscale = np.append(tscale,sciopt.fminbound(fun,0.9,1.5)) #this is a last fix to scaling, not currently used
             tbidx = deepcopy(bidx)
