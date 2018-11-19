@@ -170,11 +170,6 @@ def clean_cbv(Matrix, n_components, ent_limit=-1.5, targ_limit=50):
 		dev = np.abs(U[:, com] - m) / s
 
 		idx0 = np.argmax(dev)
-#		print(dev[indx])
-
-#		indx = (dev > 2000)
-		
-		
 		
 		# Remove high weight target
 #		idx0 = np.argmax(np.abs(U[:,com]))	
@@ -267,6 +262,7 @@ def lc_matrix(sector, cbv_area):
 		mat.fill(np.nan)
 		stds = np.empty(Nstars, dtype='float64')
 		priorities = np.empty(Nstars, dtype='int64')
+		
 		for k, star in tqdm(enumerate(stars), total=Nstars):
 			priorities[k] = star['priority']
 			starid = star['starid']
@@ -367,14 +363,26 @@ class CBV(object):
 
 	def __init__(self, filepath):
 		self.cbv = np.load(filepath)
-
+		
+	def lsfit(self, flux):
+		
+		idx = np.isfinite(self.cbv[:,0]) & np.isfinite(flux)
+		A = self.cbv[idx,:]
+		coeffs = np.linalg.lstsq(A, flux[idx], rcond=None)[0]
+		
+		return coeffs
+		
 	def mdl(self, coeffs):
 		coeffs = np.atleast_1d(coeffs)
-		m = np.empty(self.cbv.shape[0], dtype='float64')
-		m.fill(coeffs[-1])
-		for k in range(len(coeffs)-1):
+#		m = np.empty(self.cbv.shape[0], dtype='float64')
+#		m.fill(coeffs[-1])
+		m = np.ones(self.cbv.shape[0], dtype='float64')
+		
+#		for k in range(len(coeffs)-1):
+		for k in range(len(coeffs)):
 			m += coeffs[k] * self.cbv[:, k]
 		return m
+	
 
 	def _lhood(self, coeffs, flux):
 		return nansum((flux - self.mdl(coeffs))**2)
@@ -382,13 +390,11 @@ class CBV(object):
 
 	def fit(self, flux, Numcbvs=2, sigma_clip=4.0, maxiter=3, use_bic=True):
 
-		# Find the median flux, as it is used for
-		# initial guesses later on:
+		# Find the median flux to normalise light curve
 		median_flux = nanmedian(flux)
-		std_flux = np.nanstd(flux)
 		
 		if Numcbvs is None:
-			Numcbvs = self.cbv.shape[1]   #+1 ????
+			Numcbvs = self.cbv.shape[1]   
 			
 		if use_bic:	
 			# Start looping over the number of CBVs to include:
@@ -401,31 +407,36 @@ class CBV(object):
 			# Test only fit with Numcbvs
 			Nstart = Numcbvs
 	
+	
+	
 		for Ncbvs in range(Nstart, Numcbvs+1):
 
 			# Initial guesses for coefficients:
-			coeffs0 = np.zeros(Ncbvs + 1, dtype='float64')
-#			coeffs0[-1] = median_flux
-			coeffs0[-1] = 0
-			print(coeffs0)
+#			coeffs0 = np.zeros(Ncbvs + 1, dtype='float64')
+			coeffs0 = np.zeros(Ncbvs, dtype='float64')
+			coeffs0[0] = 0.3
+#			coeffs0[-1] = 1
 
 			iters = 0
-#			fluxi = np.copy(flux)
-			fluxi = ((flux / median_flux) - 1 ) / std_flux
+			fluxi = np.copy(flux) / median_flux 
 			while iters <= maxiter:
 				iters += 1
-
-				#TODO: update start guess in iteration
-
 
 				# Do the fit:
 				res = minimize(self._lhood, coeffs0, args=(fluxi, ), method='Powell')
 				flux_filter = self.mdl(res.x)
 
+#				res = self.lsfit(fluxi)
+#				flux_filter = self.mdl(res)
+
 				# Do robust sigma clipping:
 				absdev = np.abs( fluxi - flux_filter )
 				mad = 1.4826*nanmedian(absdev)
 				indx = np.greater(absdev, sigma_clip*mad, where=np.isfinite(fluxi))
+				
+				# Update guess for next iteration
+#				coeffs0 = res.x
+				
 				if np.any(indx):
 					fluxi[indx] = np.nan
 				else:
@@ -442,12 +453,12 @@ class CBV(object):
 			# Use the solution which minimizes the BIC:
 			indx = np.argmin(bic)
 			res_final = solutions[indx].x
-			flux_filter = (self.mdl(res_final)*std_flux + 1) * median_flux
-#			flux_filter = self.mdl(res_final) +1
+			flux_filter = self.mdl(res_final)  * median_flux
+
 		else:
 			res_final = res.x
-			print(res_final)
-			flux_filter = (self.mdl(res_final)*std_flux + 1) * median_flux
+#			res_final = res
+			flux_filter = self.mdl(res_final)  * median_flux
 
 		#plt.figure()
 		#plt.plot(bic, '.-')
@@ -468,17 +479,7 @@ if __name__ == '__main__':
 	threshold_correlation = 0.5
 	threshold_snrtest = 5.0
 
-	# Remove old plots:
-	if os.path.exists("plots/sector%02d/" % sector):
-		for f in glob.iglob("plots/sector%02d/*.png" % sector):
-			os.remove(f)		
-	else:    
-		os.makedirs("plots/sector%02d/" % sector)
-		
 	
-		
-		
-		
 	# Open the TODO file for that sector:
 	filepath_todo = 'todo.sqlite'
 	conn = sqlite3.connect(filepath_todo)
@@ -492,14 +493,28 @@ if __name__ == '__main__':
 
 	# Loop through the CBV areas:
 	# - or run them in parallel - whatever you like!
-	for cbv_area in cbv_areas:
+	for ii, cbv_area in enumerate(cbv_areas):
 		
+		n_components = 8
+		
+		if ii<4:
+			continue
+		
+		# Remove old plots:
+		if os.path.exists("plots/sector%02d/" % sector):
+			for f in glob.iglob("plots/sector%02d/*%d.png" % (sector, cbv_area)):
+				os.remove(f)		
+		else:    
+			os.makedirs("plots/sector%02d/" % sector)
+			
 		# Remove old plots:
 		if os.path.exists("plots/sector%02d/stars_area%d/" % (sector, cbv_area)):
 			for f in glob.iglob("plots/sector%02d/stars_area%d/*.png" % (sector, cbv_area)):
 				os.remove(f)		
 		else:    
 			os.makedirs("plots/sector%02d/stars_area%d/" % (sector, cbv_area))
+
+
 
 		# Extract or compute cleaned and gapgilled light curve matrix
 		mat0, priorities, stds, indx_nancol, Ntimes = lc_matrix_clean(sector, cbv_area)
@@ -516,7 +531,7 @@ if __name__ == '__main__':
 		
 		print('Cleaning matrix for CBV - remove single dominant contributions')
 		# Clean away targets that contribute significantly as a single star to a given CBV (based on entropy)
-		mat = clean_cbv(mat0, n_components, ent_limit=-2, targ_limit=100)
+		mat = clean_cbv(mat0, n_components, ent_limit=-2, targ_limit=150)
 		
 
 		# Calculate the principle components of cleaned matrix
@@ -540,6 +555,8 @@ if __name__ == '__main__':
 		if np.any(indx_lowsnr):
 			print("Rejecting %d CBVs based on SNR test" % np.sum(indx_lowsnr))
 			cbv = cbv1[:, ~indx_lowsnr]
+		else:
+			cbv = cbv1
 			
 		# Update maximum number of components	
 		n_components = cbv.shape[1]
@@ -559,7 +576,7 @@ if __name__ == '__main__':
 		ax0.plot(n_cbv_components, pca_scores, 'b', label='PCA scores')
 		ax0.set_xlabel('nb of components')
 		ax0.set_ylabel('CV scores')
-		plt.legend(loc='lower right')
+		ax0.legend(loc='lower right')
 		
 		ax02.plot(np.arange(1, cbv0.shape[1]+1), pca.explained_variance_ratio_, '.-')
 		ax02.axvline(x=cbv.shape[1]+0.5, ls='--', color='k')
@@ -618,7 +635,6 @@ if __name__ == '__main__':
 			starid = star['starid']
 			print(starid, kk, len(stars))
 
-#			time, flux = np.loadtxt(os.path.join('sysnoise', 'Star%d.sysnoise' % (starid,)), usecols=(0, 1), unpack=True)
 			data = pd.read_csv(os.path.join('sysnoise', 'Star%d.sysnoise' % (starid,)),  usecols=(0, 1), skiprows=6, sep=' ', header=None, names=['Time', 'Flux'])
 			time, flux = data['Time'].values, data['Flux'].values
 
@@ -630,10 +646,10 @@ if __name__ == '__main__':
 			results[kk, 1:len(res)+1] = res
 			print(res)
 			
-#			time_clean, flux_clean = np.loadtxt(os.path.join('noisy', 'Star%d.noisy' % (starid, )), usecols=(0, 1), unpack=True)
+			
+			# Plot comparison between clean and corrected data
 			data_clean = pd.read_csv(os.path.join('noisy', 'Star%d.noisy' % (starid,)),  usecols=(0, 1), skiprows=6, sep=' ', header=None, names=['Time', 'Flux'])
 			time_clean, flux_clean = data_clean['Time'].values, data_clean['Flux'].values
-
 
 			fig = plt.figure()
 			ax1 = fig.add_subplot(211)
@@ -654,7 +670,7 @@ if __name__ == '__main__':
 		np.savez('mat-sector%02d-%d_free_weights.npz' % (sector, cbv_area), res=results)
 
 
-		fig = plt.figure()
+		fig = plt.figure(figsize=(15,6))
 		ax = fig.add_subplot(121)
 		ax2 = fig.add_subplot(122)
 		for kk in range(1,n_components+1):
@@ -675,6 +691,6 @@ if __name__ == '__main__':
 		fig.savefig('plots/sector%02d/weights-sector%02d-%d.png' % (sector, sector, cbv_area))
 		plt.close('all')
 
-		sys.exit()
+#		sys.exit()
 
 
