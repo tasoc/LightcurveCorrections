@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
+.. codeauthor:: Mikkel N. Lund <mikkelnl@phys.au.dk>
 .. codeauthor:: Rasmus Handberg <rasmush@phys.au.dk>
 """
 
@@ -21,127 +22,28 @@ from scipy.interpolate import pchip_interpolate
 import itertools
 from statsmodels.nonparametric.kde import KDEUnivariate as KDE
 from scipy.special import xlogy
-
+import scipy.linalg as slin
 import warnings
 warnings.filterwarnings('ignore', category=FutureWarning, module="scipy.stats") # they are simply annoying!
 
-#from photometry.utilities import move_median_central
 from tqdm import tqdm
+
+from cbv_util import compute_entopy, _move_median_central_1d, move_median_central, compute_scores, rms, MAD_model
 plt.ioff()
-#Hello
-#Hello again
 
-#------------------------------------------------------------------------------
-def _move_median_central_1d(x, width_points):
-	y = move_median(x, width_points, min_count=1)
-	y = np.roll(y, -width_points//2+1)
-	for k in range(width_points//2+1):
-		y[k] = nanmedian(x[:(k+2)])
-		y[-(k+1)] = nanmedian(x[-(k+2):])
-	return y
-
-#------------------------------------------------------------------------------
-def move_median_central(x, width_points, axis=0):
-	return np.apply_along_axis(_move_median_central_1d, axis, x, width_points)
-
-#------------------------------------------------------------------------------
-def pearson(x, y):
-	indx = np.isfinite(x) & np.isfinite(y)
-	r, _ = pearsonr(x[indx], y[indx]) # Second output (p-value) is not used
-	return r
-
-
-#------------------------------------------------------------------------------
-def compute_scores(X, n_components):
-    pca = PCA(svd_solver='full')
-
-    pca_scores = []
-    for n in n_components:
-        pca.n_components = n
-        pca_scores.append(np.mean(cross_val_score(pca, X, cv=5)))
-
-    return pca_scores
-
-#------------------------------------------------------------------------------
-def rms(x, **kwargs):
-	return np.sqrt(nansum(x**2, **kwargs)/len(x))
-
-#------------------------------------------------------------------------------
-def hpd(data, level) :
-    """ The Highest Posterior Density (credible) interval of data at level level.
-  
-    :param data: sequence of real values
-    :param level: (0 < level < 1)
-    """ 
-    
-    d = list(data)
-    d.sort()
-  
-    nData = len(data)
-    nIn = int(round(level * nData))
-    if nIn < 2 :
-      raise RuntimeError("not enough data")
-    
-    i = 0
-    r = d[i+nIn-1] - d[i]
-    for k in range(len(d) - (nIn - 1)) :
-      rk = d[k+nIn-1] - d[k]
-      if rk < r :
-        r = rk
-        i = k
-  
-    assert 0 <= i <= i+nIn-1 < len(d)
-    
-    return (d[i], d[i+nIn-1], i, i+nIn-1)
-    
-
-#------------------------------------------------------------------------------
-def compute_entopy(U):
-
-	HGauss0 = 0.5 + 0.5*np.log(2*np.pi)
-		
-	nSingVals = U.shape[1]
-	H = np.empty(nSingVals, dtype='float64')
 	
-#	fig, axes = plt.subplots(4, 2, figsize=(12, 8))
-	
-	
-#	for iBasisVector, ax in enumerate(axes.flatten()):
-	for iBasisVector in range(nSingVals):
-		
-#		print(np.sum(np.abs(U[:,iBasisVector]>0)), U.shape[0])
-#		pdf, xedges = np.histogram(np.abs(U[:, iBasisVector]), bins=nBins, density=True)
-#		x = xedges[1:] - xedges[:-1]
-		
-		kde = KDE(np.abs(U[:, iBasisVector]))
-		kde.fit(gridsize=1000)
-		
-		pdf = kde.density
-		x = kde.support
-		
-		dx = x[1]-x[0]
-		# Calculate the Gaussian entropy
-		pdfMean = nansum(x * pdf)*dx
-#		pdfMean = kde.support[np.argmax(kde.density)]
-		sigma = np.sqrt( nansum(((x-pdfMean)**2) * pdf) * dx )
-		
-#		HPD = hpd(np.abs(U[:, iBasisVector]), 0.682689492137)
-#		print(HPD)
-#		sigma = (HPD[1] - HPD[0])/2
-		HGauss = HGauss0 + np.log(sigma)
-
-		# Calculate vMatrix entropy
-		pdf_pos = (pdf>0)
-#		HVMatrix = entropy(pdf[pdf_pos] ) * dx 
-		HVMatrix = -np.sum(xlogy(pdf[pdf_pos], pdf[pdf_pos])) * dx
-
-		# Returned entropy is difference between V-Matrix entropy and Gaussian entropy of similar width (sigma)
-		H[iBasisVector] = HVMatrix - HGauss	
-		
-#		print(pdfMean, sigma, HGauss, HVMatrix)
-#		ax.plot(kde.support, kde.density)
-#	plt.show()	
-	return H
+#------------------------------------------------------------------------------
+def cbv_snr_reject(cbv_ini, threshold_snrtest=5.0):
+	A_signal = rms(cbv_ini, axis=0)
+	A_noise = rms(np.diff(cbv_ini, axis=0), axis=0)
+	snr = 10 * np.log10( A_signal**2 / A_noise**2 )
+	indx_lowsnr = (snr < threshold_snrtest)
+	if np.any(indx_lowsnr):
+		print("Rejecting %d CBVs based on SNR test" % np.sum(indx_lowsnr))
+		cbv = cbv_ini[:, ~indx_lowsnr]
+		return cbv, indx_lowsnr	
+	else:
+		return cbv_ini, None
 	
 
 #------------------------------------------------------------------------------
@@ -152,8 +54,6 @@ def clean_cbv(Matrix, n_components, ent_limit=-1.5, targ_limit=50):
 	print("Doing Principle Component Analysis...")
 	pca = PCA(n_components)
 	U, _, _ = pca._fit(Matrix)
-	
-	
 	
 	Ent = compute_entopy(U)
 	print('Entropy start:', Ent)
@@ -170,9 +70,7 @@ def clean_cbv(Matrix, n_components, ent_limit=-1.5, targ_limit=50):
 		dev = np.abs(U[:, com] - m) / s
 
 		idx0 = np.argmax(dev)
-		
-		# Remove high weight target
-#		idx0 = np.argmax(np.abs(U[:,com]))	
+	
 		star_no = np.ones(U.shape[0], dtype=bool)
 		star_no[idx0] = False
 		print('removing star ', idx0)
@@ -188,8 +86,6 @@ def clean_cbv(Matrix, n_components, ent_limit=-1.5, targ_limit=50):
 		Ent = compute_entopy(U)
 		print('Entropy:', Ent)
 		
-	
-	
 	print('Targets removed ', targets_removed)
 	return Matrix
 
@@ -199,12 +95,11 @@ def clean_cbv(Matrix, n_components, ent_limit=-1.5, targ_limit=50):
 def lc_matrix(sector, cbv_area):
 	
 	#---------------------------------------------------------------------------------------------------------
-	# CALCULATE CBV FOR THIS CBV-AREA
+	# CALCULATE LIGHT CURVE CORRELATIONS
 	#---------------------------------------------------------------------------------------------------------
 
 	print("We are running CBV_AREA=%d" % cbv_area)
-	camera = np.floor(cbv_area/100)
-	#print(camera)
+
 
 	tmpfile = 'mat-sector%02d-%d.npz' % (sector, cbv_area)
 	if os.path.exists(tmpfile):
@@ -227,6 +122,7 @@ def lc_matrix(sector, cbv_area):
 		median_variability = nanmedian(variability)
 
 		# Plot the distribution of variability for all stars:
+		# TODO: Move to dedicated plotting module
 		fig = plt.figure()
 		ax = fig.add_subplot(111)
 		ax.hist(variability/median_variability, bins=np.logspace(np.log10(0.1), np.log10(1000.0), 50))
@@ -237,7 +133,6 @@ def lc_matrix(sector, cbv_area):
 		plt.close(fig)
 
 		# Get the list of star that we are going to load in the lightcurves for:
-		# We have put a hard limit of a maximum of 20000 targets for now.
 		cursor.execute("""SELECT todolist.starid,todolist.priority,mean_flux,variance FROM todolist LEFT JOIN diagnostics ON todolist.priority=diagnostics.priority WHERE
 			datasource='ffi'
 			AND status=1
@@ -250,7 +145,7 @@ def lc_matrix(sector, cbv_area):
 		Nstars = len(stars)
 
 		# Load the very first timeseries only to find the number of timestamps.
-		# When using FITS files in the future, this could simply be loaded from the header.
+		# TODO: When using FITS files in the future, this could simply be loaded from the header.
 		time = np.loadtxt(os.path.join('sysnoise', 'Star%d.sysnoise' % (stars[0]['starid'],)), usecols=(0, ), unpack=True)
 		Ntimes = len(time)
 
@@ -268,7 +163,6 @@ def lc_matrix(sector, cbv_area):
 			starid = star['starid']
 
 			flux = np.loadtxt(os.path.join('sysnoise', 'Star%d.sysnoise' % (starid,)), usecols=(1, ), unpack=True)
-			#print(flux.shape)
 
 			# Normalize the data and store it in the rows of the matrix:
 			mat[k, :] = flux / star['mean_flux'] - 1.0
@@ -309,6 +203,10 @@ def lc_matrix(sector, cbv_area):
 		np.savez('mat-sector%02d-%d.npz' % (sector, cbv_area), mat=mat, priorities=priorities, stds=stds)
 
 	return mat, priorities, stds
+
+# =============================================================================
+# 
+# =============================================================================
 	
 def lc_matrix_clean(sector, cbv_area):
 	
@@ -365,20 +263,15 @@ class CBV(object):
 		self.cbv = np.load(filepath)
 		
 	def lsfit(self, flux):
-		
 		idx = np.isfinite(self.cbv[:,0]) & np.isfinite(flux)
 		A = self.cbv[idx,:]
-		coeffs = np.linalg.lstsq(A, flux[idx], rcond=None)[0]
-		
+		coeffs = slin.lstsq(A, flux[idx])[0]
 		return coeffs
 		
 	def mdl(self, coeffs):
 		coeffs = np.atleast_1d(coeffs)
-#		m = np.empty(self.cbv.shape[0], dtype='float64')
-#		m.fill(coeffs[-1])
 		m = np.ones(self.cbv.shape[0], dtype='float64')
 		
-#		for k in range(len(coeffs)-1):
 		for k in range(len(coeffs)):
 			m += coeffs[k] * self.cbv[:, k]
 		return m
@@ -387,8 +280,23 @@ class CBV(object):
 	def _lhood(self, coeffs, flux):
 		return nansum((flux - self.mdl(coeffs))**2)
 	
+	
+	def fitting(self, flux, Ncbvs, method='powell'):
+		if method=='powell':
+			# Initial guesses for coefficients:
+			coeffs0 = np.zeros(Ncbvs, dtype='float64')
+			coeffs0[0] = 1
+			
+			res = minimize(self._lhood, coeffs0, args=(flux, ), method='Powell')
+			return res.x
+		
+		elif method=='llsq':
+			res = cbv.lsfit(flux)
+			return res
 
-	def fit(self, flux, Numcbvs=2, sigma_clip=4.0, maxiter=3, use_bic=True):
+	
+
+	def fit(self, flux, Numcbvs=2, sigma_clip=4.0, maxiter=3, use_bic=True, method='powel'):
 
 		# Find the median flux to normalise light curve
 		median_flux = nanmedian(flux)
@@ -410,33 +318,22 @@ class CBV(object):
 	
 	
 		for Ncbvs in range(Nstart, Numcbvs+1):
-
-			# Initial guesses for coefficients:
-#			coeffs0 = np.zeros(Ncbvs + 1, dtype='float64')
-			coeffs0 = np.zeros(Ncbvs, dtype='float64')
-			coeffs0[0] = 0.3
-#			coeffs0[-1] = 1
-
+			
 			iters = 0
 			fluxi = np.copy(flux) / median_flux 
 			while iters <= maxiter:
 				iters += 1
 
 				# Do the fit:
-				res = minimize(self._lhood, coeffs0, args=(fluxi, ), method='Powell')
-				flux_filter = self.mdl(res.x)
-
-#				res = self.lsfit(fluxi)
-#				flux_filter = self.mdl(res)
+				res = self.fitting(fluxi, Ncbvs, method=method)
+				flux_filter = self.mdl(res)
 
 				# Do robust sigma clipping:
-				absdev = np.abs( fluxi - flux_filter )
-				mad = 1.4826*nanmedian(absdev)
+				
+				absdev = np.abs(fluxi - flux_filter)
+				mad = MAD_model(absdev)
 				indx = np.greater(absdev, sigma_clip*mad, where=np.isfinite(fluxi))
-				
-				# Update guess for next iteration
-#				coeffs0 = res.x
-				
+								
 				if np.any(indx):
 					fluxi[indx] = np.nan
 				else:
@@ -444,7 +341,7 @@ class CBV(object):
 
 			if use_bic:
 				# Calculate the Bayesian Information Criterion (BIC) and store the solution:
-				bic[Ncbvs] = np.log(np.sum(np.isfinite(fluxi)))*len(coeffs0) + res.fun
+				bic[Ncbvs] = np.log(np.sum(np.isfinite(fluxi)))*len(res) + cbv._lhood(fluxi, res)
 				solutions.append(res)
 			
 							
@@ -452,17 +349,13 @@ class CBV(object):
 		if use_bic:
 			# Use the solution which minimizes the BIC:
 			indx = np.argmin(bic)
-			res_final = solutions[indx].x
+			res_final = solutions[indx]
 			flux_filter = self.mdl(res_final)  * median_flux
 
 		else:
-			res_final = res.x
-#			res_final = res
+			res_final = res
 			flux_filter = self.mdl(res_final)  * median_flux
 
-		#plt.figure()
-		#plt.plot(bic, '.-')
-		#plt.show()
 
 		return flux_filter, res_final
 
@@ -548,15 +441,7 @@ if __name__ == '__main__':
 		
 		
 		# Signal-to-Noise test:
-		A_signal = rms(cbv1, axis=0)
-		A_noise = rms(np.diff(cbv1, axis=0), axis=0)
-		snr = 10 * np.log10( A_signal**2 / A_noise**2 )
-		indx_lowsnr = (snr < threshold_snrtest)
-		if np.any(indx_lowsnr):
-			print("Rejecting %d CBVs based on SNR test" % np.sum(indx_lowsnr))
-			cbv = cbv1[:, ~indx_lowsnr]
-		else:
-			cbv = cbv1
+		cbv, indx_lowsnr = cbv_snr_reject(cbv1, threshold_snrtest)
 			
 		# Update maximum number of components	
 		n_components = cbv.shape[1]
@@ -639,7 +524,7 @@ if __name__ == '__main__':
 			time, flux = data['Time'].values, data['Flux'].values
 
 			# Fit the CBV to the flux:
-			flux_filter, res = cbv.fit(flux, Numcbvs=n_components, use_bic=False)
+			flux_filter, res = cbv.fit(flux, Numcbvs=n_components, use_bic=False, method='powell')
 			
 			res = np.array([res,]).flatten()
 			results[kk, 0] = starid
