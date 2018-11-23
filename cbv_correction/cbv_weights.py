@@ -33,7 +33,7 @@ from cbv_util import compute_entopy, _move_median_central_1d, move_median_centra
 plt.ioff()
 
 import dill
-
+from scipy import integrate
 
 # =============================================================================
 # 
@@ -94,6 +94,8 @@ def ndim_med_filt(v, x, n, dist='euclidean', mad_frac=2):
 # TODO: Tests with polar coordinates in combination with other CBV areas	
 # TODO: mode vs. median in binning
 # TODO: use klepto to cashe interpolation function (https://stackoverflow.com/questions/23997431/is-there-a-way-to-pickle-a-scipy-interpolate-rbf-object)
+# TODO: Normalise interpolation to unit volume -> pdf prior
+
 
 if __name__ == '__main__':
 	# Pick a sector, any sector....
@@ -259,12 +261,15 @@ if __name__ == '__main__':
 #		rbfi2 = SmoothBivariateSpline(verts2[:,0], verts2[:,1], zvals2)
 #		rbfi3 = SmoothBivariateSpline(verts3[:,0], verts3[:,1], zvals3)
 		
-		with open('Rbf_CBV1.pkl', 'wb') as file:
+		with open('Rbf_area%d_cbv1.pkl' %cbv_area, 'wb') as file:
 			dill.dump(rbfi1, file)
 
-		with open('Rbf_CBV1.pkl', 'rb') as file:
+		with open('Rbf_area%d_cbv1.pkl' %cbv_area, 'rb') as file:
 			B = dill.load(file)
 		
+		
+		I=integrate.nquad(B, [[verts1[:,0].min(), verts1[:,0].max()], [verts1[:,1].min(), verts1[:,1].max()]], full_output=True) #opts=[opts0,{},{},{}], 
+		print('I:', I)
 		
 		# Plot resulting interpolation
 		x1 = np.linspace(verts1[:,0].min(), verts1[:,0].max(), 100); y1 = np.linspace(verts1[:,1].min(), verts1[:,1].max(), 100); xv1, yv1 = np.meshgrid(x1, y1)
@@ -289,6 +294,7 @@ if __name__ == '__main__':
 #		ax2.hexbin(results[:,-2], results[:,-1], C=np.abs(results[:,2]), gridsize=10, reduce_C_function=np.median, cmap=colormap, norm=normalize2, marginals=False)
 #		ax3.hexbin(results[:,-2], results[:,-1], C=np.abs(results[:,3]), gridsize=10, reduce_C_function=np.median, cmap=colormap, norm=normalize3, marginals=False)
 		
+		break
 
 
 #	print(minlat, maxlat)
