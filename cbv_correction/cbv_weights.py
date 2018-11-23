@@ -32,6 +32,9 @@ import math
 from cbv_util import compute_entopy, _move_median_central_1d, move_median_central, compute_scores, rms, MAD_model
 plt.ioff()
 
+import dill
+
+
 # =============================================================================
 # 
 # =============================================================================
@@ -90,7 +93,7 @@ def ndim_med_filt(v, x, n, dist='euclidean', mad_frac=2):
 # TODO: Better/Other CBV areas
 # TODO: Tests with polar coordinates in combination with other CBV areas	
 # TODO: mode vs. median in binning
-
+# TODO: use klepto to cashe interpolation function (https://stackoverflow.com/questions/23997431/is-there-a-way-to-pickle-a-scipy-interpolate-rbf-object)
 
 if __name__ == '__main__':
 	# Pick a sector, any sector....
@@ -256,6 +259,12 @@ if __name__ == '__main__':
 #		rbfi2 = SmoothBivariateSpline(verts2[:,0], verts2[:,1], zvals2)
 #		rbfi3 = SmoothBivariateSpline(verts3[:,0], verts3[:,1], zvals3)
 		
+		with open('Rbf_CBV1.pkl', 'wb') as file:
+			dill.dump(rbfi1, file)
+
+		with open('Rbf_CBV1.pkl', 'rb') as file:
+			B = dill.load(file)
+		
 		
 		# Plot resulting interpolation
 		x1 = np.linspace(verts1[:,0].min(), verts1[:,0].max(), 100); y1 = np.linspace(verts1[:,1].min(), verts1[:,1].max(), 100); xv1, yv1 = np.meshgrid(x1, y1)
@@ -269,7 +278,8 @@ if __name__ == '__main__':
 #		from scipy.interpolate import griddata
 #		grid_z0 = griddata(verts1, zvals1, (xv1, yv1), method='nearest')
 
-		ax1_2.contourf(xv1, yv1, rbfi1(xv1, yv1), cmap=colormap, norm=normalize1)
+		ax1_2.contourf(xv1, yv1, B(xv1, yv1), cmap=colormap, norm=normalize1)
+#		ax1_2.contourf(xv1, yv1, rbfi1(xv1, yv1), cmap=colormap, norm=normalize1)
 		ax2_2.contourf(xv2, yv2, rbfi2(xv2, yv2), cmap=colormap, norm=normalize2)
 		ax3_2.contourf(xv3, yv3, rbfi3(xv3, yv3), cmap=colormap, norm=normalize3)
 		ax4_2.contourf(xv4, yv4, rbfi4(xv4, yv4), cmap=colormap, norm=normalize1)
