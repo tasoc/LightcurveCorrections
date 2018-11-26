@@ -263,13 +263,29 @@ if __name__ == '__main__':
 		
 		with open('Rbf_area%d_cbv1.pkl' %cbv_area, 'wb') as file:
 			dill.dump(rbfi1, file)
+		with open('Rbf_area%d_cbv1_std.pkl' %cbv_area, 'wb') as file:
+			dill.dump(rbfi4, file)	
+			
+		with open('Rbf_area%d_cbv2.pkl' %cbv_area, 'wb') as file:
+			dill.dump(rbfi2, file)
+		with open('Rbf_area%d_cbv2_std.pkl' %cbv_area, 'wb') as file:
+			dill.dump(rbfi5, file)	
+			
+		with open('Rbf_area%d_cbv3.pkl' %cbv_area, 'wb') as file:
+			dill.dump(rbfi3, file)
+		with open('Rbf_area%d_cbv3_std.pkl' %cbv_area, 'wb') as file:
+			dill.dump(rbfi6, file)		
+
+
+
+
 
 		with open('Rbf_area%d_cbv1.pkl' %cbv_area, 'rb') as file:
 			B = dill.load(file)
 		
 		
-		I=integrate.nquad(B, [[verts1[:,0].min(), verts1[:,0].max()], [verts1[:,1].min(), verts1[:,1].max()]], full_output=True) #opts=[opts0,{},{},{}], 
-		print('I:', I)
+#		I=integrate.nquad(B, [[verts1[:,0].min(), verts1[:,0].max()], [verts1[:,1].min(), verts1[:,1].max()]], full_output=True) #opts=[opts0,{},{},{}], 
+#		print('I:', I)
 		
 		# Plot resulting interpolation
 		x1 = np.linspace(verts1[:,0].min(), verts1[:,0].max(), 100); y1 = np.linspace(verts1[:,1].min(), verts1[:,1].max(), 100); xv1, yv1 = np.meshgrid(x1, y1)
@@ -294,7 +310,7 @@ if __name__ == '__main__':
 #		ax2.hexbin(results[:,-2], results[:,-1], C=np.abs(results[:,2]), gridsize=10, reduce_C_function=np.median, cmap=colormap, norm=normalize2, marginals=False)
 #		ax3.hexbin(results[:,-2], results[:,-1], C=np.abs(results[:,3]), gridsize=10, reduce_C_function=np.median, cmap=colormap, norm=normalize3, marginals=False)
 		
-		break
+#		break
 
 
 #	print(minlat, maxlat)

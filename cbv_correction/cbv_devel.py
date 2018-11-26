@@ -25,9 +25,9 @@ from scipy.special import xlogy
 import scipy.linalg as slin
 import warnings
 warnings.filterwarnings('ignore', category=FutureWarning, module="scipy.stats") # they are simply annoying!
-
+import dill
 from tqdm import tqdm
-
+import time as TIME
 from cbv_util import compute_entopy, _move_median_central_1d, move_median_central, compute_scores, rms, MAD_model
 plt.ioff()
 
@@ -92,7 +92,7 @@ def clean_cbv(Matrix, n_components, ent_limit=-1.5, targ_limit=50):
 
 
 
-def lc_matrix(sector, cbv_area):
+def lc_matrix(sector, cbv_area, cursor):
 	
 	#---------------------------------------------------------------------------------------------------------
 	# CALCULATE LIGHT CURVE CORRELATIONS
@@ -179,7 +179,7 @@ def lc_matrix(sector, cbv_area):
 				correlations = np.empty((Nstars, Nstars), dtype='float64')
 				np.fill_diagonal(correlations, np.nan) # Put NaNs on the diagonal
 				for i, j in tqdm(itertools.combinations(range(Nstars), 2), total=0.5*Nstars**2-Nstars):
-					r = pearson(mat[i, :]/stds[i], mat[j, :]/stds[j])
+					r = pearsonr(mat[i, :]/stds[i], mat[j, :]/stds[j])
 					correlations[i,j] = correlations[j,i] = np.abs(r)
 
 				np.save(file_correlations, correlations)
@@ -208,7 +208,7 @@ def lc_matrix(sector, cbv_area):
 # 
 # =============================================================================
 	
-def lc_matrix_clean(sector, cbv_area):
+def lc_matrix_clean(sector, cbv_area, cursor):
 	
 	
 	print('Running matrix clean')
@@ -225,7 +225,7 @@ def lc_matrix_clean(sector, cbv_area):
 
 	else:
 		# Compute light curve correlation matrix
-		mat0, priorities, stds = lc_matrix(sector, cbv_area)
+		mat0, priorities, stds = lc_matrix(sector, cbv_area, cursor)
 		
 		# Print the final shape of the matrix:
 		print("Matrix size: %d x %d" % mat0.shape)
@@ -257,6 +257,10 @@ def lc_matrix_clean(sector, cbv_area):
 	return mat, priorities, stds, indx_nancol, Ntimes
 	
 #------------------------------------------------------------------------------
+	
+# TODO: try do fitting in 1D
+	
+
 class CBV(object):
 
 	def __init__(self, filepath):
@@ -271,15 +275,45 @@ class CBV(object):
 	def mdl(self, coeffs):
 		coeffs = np.atleast_1d(coeffs)
 		m = np.ones(self.cbv.shape[0], dtype='float64')
-		
 		for k in range(len(coeffs)):
 			m += coeffs[k] * self.cbv[:, k]
 		return m
 	
-
-	def _lhood(self, coeffs, flux):
-		return nansum((flux - self.mdl(coeffs))**2)
+	def mdl1d(self, coeff, ncbv):
+		m = 1 + coeff * self.cbv[:, ncbv]
+		return m
 	
+	def _lhood(self, coeffs, flux):
+		return 0.5*nansum((flux - self.mdl(coeffs))**2)
+
+	def _lhood1d(self, coeff, flux, ncbv):
+		return 0.5*nansum((flux - self.mdl1d(coeff, ncbv))**2)
+	
+	def _prior_load(self, cbv_areas, path='', ncbvs=3):
+		P = {}
+		for ii, cbv_area in enumerate(cbv_areas):
+			for jj, ncbv in enumerate(np.arange(1,ncbvs+1)):
+				with open('Rbf_area%d_cbv%i.pkl' %(cbv_area,ncbv), 'rb') as file:
+					I = dill.load(file)
+					P['cbv_area%d_cbv%i' %(cbv_area, ncbv)] = I
+				with open('Rbf_area%d_cbv%i_std.pkl' %(cbv_area,ncbv), 'rb') as file:
+					Is = dill.load(file)	
+					P['cbv_area%d_cbv%i_std' %(cbv_area, ncbv)] = Is
+		return P
+
+	def _prior(self, P, c, x, cbv_area, ncbv):
+		X = np.array(x)
+		I = P['cbv_area%d_cbv%i' %(cbv_area, ncbv)]
+		Is = P['cbv_area%d_cbv%i_std' %(cbv_area, ncbv)]
+		# negative log prior
+		Ptot = 0.5*(float(c-I(X))/Is(X))**2
+		return Ptot
+		
+#		Ptot = 0
+#		
+#		for jj, ncbv in enumerate(np.arange(1,ncbvs+1)):
+#		return Ptot
+
 	
 	def fitting(self, flux, Ncbvs, method='powell'):
 		if method=='powell':
@@ -287,11 +321,26 @@ class CBV(object):
 			coeffs0 = np.zeros(Ncbvs, dtype='float64')
 			coeffs0[0] = 1
 			
-			res = minimize(self._lhood, coeffs0, args=(flux, ), method='Powell')
-			return res.x
+#			T0 = TIME.time()
+			res = np.zeros(Ncbvs, dtype='float64')
+			for jj in range(Ncbvs):
+				res[jj] = minimize(self._lhood1d, coeffs0[jj], args=(flux, jj), method='Powell').x
+#			print(res)
+#			print(TIME.time()-T0)
+#			
+#			T1 = TIME.time()
+#			res2 = minimize(self._lhood, coeffs0, args=(flux, ), method='Powell').x
+#			print(res2)
+#			print(TIME.time()-T1)
+			
+			
+			
+			return res
+			
+#			return res.x
 		
 		elif method=='llsq':
-			res = cbv.lsfit(flux)
+			res = CBV.lsfit(flux)
 			return res
 
 	
@@ -316,7 +365,7 @@ class CBV(object):
 			Nstart = Numcbvs
 	
 	
-	
+		# TODO: Early break if results are unchanged
 		for Ncbvs in range(Nstart, Numcbvs+1):
 			
 			iters = 0
@@ -329,7 +378,6 @@ class CBV(object):
 				flux_filter = self.mdl(res)
 
 				# Do robust sigma clipping:
-				
 				absdev = np.abs(fluxi - flux_filter)
 				mad = MAD_model(absdev)
 				indx = np.greater(absdev, sigma_clip*mad, where=np.isfinite(fluxi))
@@ -341,7 +389,7 @@ class CBV(object):
 
 			if use_bic:
 				# Calculate the Bayesian Information Criterion (BIC) and store the solution:
-				bic[Ncbvs] = np.log(np.sum(np.isfinite(fluxi)))*len(res) + cbv._lhood(fluxi, res)
+				bic[Ncbvs] = np.log(np.sum(np.isfinite(fluxi)))*len(res) + CBV._lhood(fluxi, res)
 				solutions.append(res)
 			
 							
@@ -358,23 +406,16 @@ class CBV(object):
 
 
 		return flux_filter, res_final
-
-#------------------------------------------------------------------------------
-if __name__ == '__main__':
-
-	import pandas as pd
-	# Pick a sector, any sector....
-	sector = 0
-	n_components = 8
-
-	# Other settings:
-	threshold_variability = 1.3
-	threshold_correlation = 0.5
-	threshold_snrtest = 5.0
+	
+	
+	
+	
+def ini_fit(filepath_todo, do_plots=True, n_components0=8):
 
 	
+	#TODO: use llsq for initial fits
+	
 	# Open the TODO file for that sector:
-	filepath_todo = 'todo.sqlite'
 	conn = sqlite3.connect(filepath_todo)
 	conn.row_factory = sqlite3.Row
 	cursor = conn.cursor()
@@ -388,54 +429,53 @@ if __name__ == '__main__':
 	# - or run them in parallel - whatever you like!
 	for ii, cbv_area in enumerate(cbv_areas):
 		
-		n_components = 8
-		
-		if ii<4:
+		if ii>0:
 			continue
 		
-		# Remove old plots:
-		if os.path.exists("plots/sector%02d/" % sector):
-			for f in glob.iglob("plots/sector%02d/*%d.png" % (sector, cbv_area)):
-				os.remove(f)		
-		else:    
-			os.makedirs("plots/sector%02d/" % sector)
-			
-		# Remove old plots:
-		if os.path.exists("plots/sector%02d/stars_area%d/" % (sector, cbv_area)):
-			for f in glob.iglob("plots/sector%02d/stars_area%d/*.png" % (sector, cbv_area)):
-				os.remove(f)		
-		else:    
-			os.makedirs("plots/sector%02d/stars_area%d/" % (sector, cbv_area))
+		if do_plots:
+			# Remove old plots:
+			if os.path.exists("plots/sector%02d/" % sector):
+				for f in glob.iglob("plots/sector%02d/*%d.png" % (sector, cbv_area)):
+					os.remove(f)		
+			else:    
+				os.makedirs("plots/sector%02d/" % sector)
+				
+			# Remove old plots:
+			if os.path.exists("plots/sector%02d/stars_area%d/" % (sector, cbv_area)):
+				for f in glob.iglob("plots/sector%02d/stars_area%d/*.png" % (sector, cbv_area)):
+					os.remove(f)		
+			else:    
+				os.makedirs("plots/sector%02d/stars_area%d/" % (sector, cbv_area))
 
 
 
-		# Extract or compute cleaned and gapgilled light curve matrix
-		mat0, priorities, stds, indx_nancol, Ntimes = lc_matrix_clean(sector, cbv_area)
+		# Extract or compute cleaned and gapfilled light curve matrix
+		mat0, priorities, stds, indx_nancol, Ntimes = lc_matrix_clean(sector, cbv_area, cursor)
 		
 		# Calculate initial CBVs
-		pca0 = PCA(n_components)
+		pca0 = PCA(n_components0)
 		U0, _, _ = pca0._fit(mat0)
 		# Not very clever, but puts NaNs back into the CBVs:
 		# For some reason I also choose to transpose the CBV matrix
-		cbv0 = np.empty((Ntimes, n_components), dtype='float64')
+		cbv0 = np.empty((Ntimes, n_components0), dtype='float64')
 		cbv0.fill(np.nan)
 		cbv0[~indx_nancol, :] = np.transpose(pca0.components_)
 		
 		
 		print('Cleaning matrix for CBV - remove single dominant contributions')
 		# Clean away targets that contribute significantly as a single star to a given CBV (based on entropy)
-		mat = clean_cbv(mat0, n_components, ent_limit=-2, targ_limit=150)
+		mat = clean_cbv(mat0, n_components0, ent_limit=-2, targ_limit=150)
 		
 
 		# Calculate the principle components of cleaned matrix
 		print("Doing Principle Component Analysis...")
-		pca = PCA(n_components)
+		pca = PCA(n_components0)
 		U, _, _ = pca._fit(mat)
 		
 		
 		# Not very clever, but puts NaNs back into the CBVs:
 		# For some reason I also choose to transpose the CBV matrix
-		cbv1 = np.empty((Ntimes, n_components), dtype='float64')
+		cbv1 = np.empty((Ntimes, n_components0), dtype='float64')
 		cbv1.fill(np.nan)
 		cbv1[~indx_nancol, :] = np.transpose(pca.components_)
 		
@@ -454,45 +494,46 @@ if __name__ == '__main__':
 		n_cbv_components = np.arange(max_components, dtype=int)
 		pca_scores = compute_scores(mat, n_cbv_components)
 		
-		# Plot the "effectiveness" of each CBV:
-		fig0 = plt.figure(figsize=(12,8))
-		ax0 = fig0.add_subplot(121)
-		ax02 = fig0.add_subplot(122)
-		ax0.plot(n_cbv_components, pca_scores, 'b', label='PCA scores')
-		ax0.set_xlabel('nb of components')
-		ax0.set_ylabel('CV scores')
-		ax0.legend(loc='lower right')
-		
-		ax02.plot(np.arange(1, cbv0.shape[1]+1), pca.explained_variance_ratio_, '.-')
-		ax02.axvline(x=cbv.shape[1]+0.5, ls='--', color='k')
-		ax02.set_xlabel('CBV number')
-		ax02.set_ylabel('Variance explained ratio')
-		
-		fig0.savefig('plots/sector%02d/cbv-perf-area%d.png' % (sector, cbv_area))
-		plt.close(fig0)
+		if do_plots:
+			# Plot the "effectiveness" of each CBV:
+			fig0 = plt.figure(figsize=(12,8))
+			ax0 = fig0.add_subplot(121)
+			ax02 = fig0.add_subplot(122)
+			ax0.plot(n_cbv_components, pca_scores, 'b', label='PCA scores')
+			ax0.set_xlabel('nb of components')
+			ax0.set_ylabel('CV scores')
+			ax0.legend(loc='lower right')
+			
+			ax02.plot(np.arange(1, cbv0.shape[1]+1), pca.explained_variance_ratio_, '.-')
+			ax02.axvline(x=cbv.shape[1]+0.5, ls='--', color='k')
+			ax02.set_xlabel('CBV number')
+			ax02.set_ylabel('Variance explained ratio')
+			
+			fig0.savefig('plots/sector%02d/cbv-perf-area%d.png' % (sector, cbv_area))
+			plt.close(fig0)
 		
 
-		# Plot all the CBVs:
-		fig, axes = plt.subplots(4, 2, figsize=(12, 8))
-		fig2, axes2 = plt.subplots(4, 2, figsize=(12, 8))
-		for k, ax in enumerate(axes.flatten()):
-			ax.plot(cbv0[:, k], 'r-')		
-			if indx_lowsnr[k]:
-				col = 'c'
-			else:
-				col = 'k'
-			ax.plot(cbv1[:, k], ls='-', color=col)	
-			ax.set_title('Basis Vector %d' % (k+1))
-			
-			
-		for k, ax in enumerate(axes2.flatten()):	
-			ax.plot(-np.abs(U0[:, k]), 'r-')
-			ax.plot(np.abs(U[:, k]), 'k-')
-			ax.set_title('Basis Vector %d' % (k+1))
-		plt.tight_layout()
-		fig.savefig('plots/sector%02d/cbvs-area%d.png' % (sector, cbv_area))
-		fig2.savefig('plots/sector%02d/U_cbvs-area%d.png' % (sector, cbv_area))
-		plt.close(fig)
+			# Plot all the CBVs:
+			fig, axes = plt.subplots(4, 2, figsize=(12, 8))
+			fig2, axes2 = plt.subplots(4, 2, figsize=(12, 8))
+			for k, ax in enumerate(axes.flatten()):
+				ax.plot(cbv0[:, k], 'r-')		
+				if indx_lowsnr[k]:
+					col = 'c'
+				else:
+					col = 'k'
+				ax.plot(cbv1[:, k], ls='-', color=col)	
+				ax.set_title('Basis Vector %d' % (k+1))
+				
+				
+			for k, ax in enumerate(axes2.flatten()):	
+				ax.plot(-np.abs(U0[:, k]), 'r-')
+				ax.plot(np.abs(U[:, k]), 'k-')
+				ax.set_title('Basis Vector %d' % (k+1))
+			plt.tight_layout()
+			fig.savefig('plots/sector%02d/cbvs-area%d.png' % (sector, cbv_area))
+			fig2.savefig('plots/sector%02d/U_cbvs-area%d.png' % (sector, cbv_area))
+			plt.close(fig)
 
 		
 
@@ -536,45 +577,63 @@ if __name__ == '__main__':
 			data_clean = pd.read_csv(os.path.join('noisy', 'Star%d.noisy' % (starid,)),  usecols=(0, 1), skiprows=6, sep=' ', header=None, names=['Time', 'Flux'])
 			time_clean, flux_clean = data_clean['Time'].values, data_clean['Flux'].values
 
-			fig = plt.figure()
-			ax1 = fig.add_subplot(211)
-			ax1.plot(time, flux)
-			ax1.plot(time, flux_filter)
-			ax1.set_xticks([])
-			ax2 = fig.add_subplot(212)
-			ax2.plot(time, flux/flux_filter-1)
-			ax2.plot(time_clean, flux_clean/nanmedian(flux_clean)-1, alpha=0.5)
-			ax2.set_xlabel('Time')
-			plt.tight_layout()
-			fig.savefig('plots/sector%02d/stars_area%d/star%d.png' % (sector, cbv_area, starid))
-			plt.close('all')
-
-
+			if do_plots:
+				fig = plt.figure()
+				ax1 = fig.add_subplot(211)
+				ax1.plot(time, flux)
+				ax1.plot(time, flux_filter)
+				ax1.set_xticks([])
+				ax2 = fig.add_subplot(212)
+				ax2.plot(time, flux/flux_filter-1)
+				ax2.plot(time_clean, flux_clean/nanmedian(flux_clean)-1, alpha=0.5)
+				ax2.set_xlabel('Time')
+				plt.tight_layout()
+				fig.savefig('plots/sector%02d/stars_area%d/star%d.png' % (sector, cbv_area, starid))
+				plt.close('all')
 
 
 		np.savez('mat-sector%02d-%d_free_weights.npz' % (sector, cbv_area), res=results)
 
+		if do_plots:
+			fig = plt.figure(figsize=(15,6))
+			ax = fig.add_subplot(121)
+			ax2 = fig.add_subplot(122)
+			for kk in range(1,n_components+1):
+				idx = np.nonzero(results[:, kk])
+				r = results[idx, kk]
+				idx2 = (r>np.percentile(r, 10)) & (r<np.percentile(r, 90))
+				kde = KDE(r[idx2])
+				kde.fit(gridsize=5000)
+				
+				ax.plot(kde.support*1e5, kde.density/np.max(kde.density), label='CBV ' + str(kk))
+				
+				err = nanmedian(np.abs(r[idx2] - nanmedian(r[idx2]))) * 1e5
+				ax2.errorbar(kk, kde.support[np.argmax(kde.density)]*1e5, yerr=err, marker='o', color='k')
+			ax.set_xlabel('CBV weight')
+			ax2.set_ylabel('CBV weight')
+			ax2.set_xlabel('CBV')
+			ax.legend()
+			fig.savefig('plots/sector%02d/weights-sector%02d-%d.png' % (sector, sector, cbv_area))
+			plt.close('all')
 
-		fig = plt.figure(figsize=(15,6))
-		ax = fig.add_subplot(121)
-		ax2 = fig.add_subplot(122)
-		for kk in range(1,n_components+1):
-			idx = np.nonzero(results[:, kk])
-			r = results[idx, kk]
-			idx2 = (r>np.percentile(r, 10)) & (r<np.percentile(r, 90))
-			kde = KDE(r[idx2])
-			kde.fit(gridsize=5000)
-			
-			ax.plot(kde.support*1e5, kde.density/np.max(kde.density), label='CBV ' + str(kk))
-			
-			err = nanmedian(np.abs(r[idx2] - nanmedian(r[idx2]))) * 1e5
-			ax2.errorbar(kk, kde.support[np.argmax(kde.density)]*1e5, yerr=err, marker='o', color='k')
-		ax.set_xlabel('CBV weight')
-		ax2.set_ylabel('CBV weight')
-		ax2.set_xlabel('CBV')
-		ax.legend()
-		fig.savefig('plots/sector%02d/weights-sector%02d-%d.png' % (sector, sector, cbv_area))
-		plt.close('all')
+#------------------------------------------------------------------------------
+if __name__ == '__main__':
+
+	import pandas as pd
+	# Pick a sector, any sector....
+	sector = 0
+	n_components = 8
+
+	# Other settings:
+	threshold_variability = 1.3
+	threshold_correlation = 0.5
+	threshold_snrtest = 5.0
+	do_plots = True
+	filepath_todo = 'todo.sqlite'
+	
+	ini_fit(filepath_todo, do_plots)
+	
+
 
 #		sys.exit()
 

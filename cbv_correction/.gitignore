@@ -1,3 +1,5 @@
-.png
-.npy
-.npz
+*.png
+*.npy
+*.npz
+*.pkl
+plots/*.png
