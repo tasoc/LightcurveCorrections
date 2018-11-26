@@ -258,7 +258,6 @@ def lc_matrix_clean(sector, cbv_area, cursor):
 	
 #------------------------------------------------------------------------------
 	
-# TODO: try do fitting in 1D
 	
 
 class CBV(object):
@@ -266,18 +265,35 @@ class CBV(object):
 	def __init__(self, filepath):
 		self.cbv = np.load(filepath)
 		
+	
 	def lsfit(self, flux):
+		
 		idx = np.isfinite(self.cbv[:,0]) & np.isfinite(flux)
-		A = self.cbv[idx,:]
-		coeffs = slin.lstsq(A, flux[idx])[0]
-		return coeffs
+		""" Computes the least-squares solution to a linear matrix equation. """
+		A0 = self.cbv[idx,:]
+		X = np.column_stack((A0, np.ones(A0.shape[0])))
+		F = flux[idx]
+		
+		C = (np.linalg.inv(X.T.dot(X)).dot(X.T)).dot(F)
+		
+		# Another (but slover) implementation
+#		C = slin.lstsq(X, flux[idx])[0]
+		return C
+		
 		
 	def mdl(self, coeffs):
 		coeffs = np.atleast_1d(coeffs)
 		m = np.ones(self.cbv.shape[0], dtype='float64')
-		for k in range(len(coeffs)):
+		for k in range(len(coeffs)-1):
 			m += coeffs[k] * self.cbv[:, k]
-		return m
+		return m + coeffs[-1]
+
+	def mdl_off(self, coeff, fitted):
+		fitted = np.atleast_1d(fitted)
+		m = np.ones(self.cbv.shape[0], dtype='float64')
+		for k in range(len(fitted)):
+			m += fitted[k] * self.cbv[:, k]
+		return m + coeff
 	
 	def mdl1d(self, coeff, ncbv):
 		m = 1 + coeff * self.cbv[:, ncbv]
@@ -285,9 +301,17 @@ class CBV(object):
 	
 	def _lhood(self, coeffs, flux):
 		return 0.5*nansum((flux - self.mdl(coeffs))**2)
+	
+	def _lhood_off(self, coeffs, flux, fitted):
+		return 0.5*nansum((flux - self.mdl_off(coeffs, fitted))**2)
 
 	def _lhood1d(self, coeff, flux, ncbv):
 		return 0.5*nansum((flux - self.mdl1d(coeff, ncbv))**2)
+	
+	def _posterior1d(self, coeff, flux, ncbv, cbv_area, Pdict, pos, wscale=5):
+		Post = self._lhood1d(coeff, flux, ncbv) + self._prior1d(Pdict, coeff, pos, cbv_area, ncbv, wscale)
+		return Post
+	
 	
 	def _prior_load(self, cbv_areas, path='', ncbvs=3):
 		P = {}
@@ -301,51 +325,59 @@ class CBV(object):
 					P['cbv_area%d_cbv%i_std' %(cbv_area, ncbv)] = Is
 		return P
 
-	def _prior(self, P, c, x, cbv_area, ncbv):
+	def _prior1d(self, P, c, x, cbv_area, ncbv, wscale=5):
 		X = np.array(x)
-		I = P['cbv_area%d_cbv%i' %(cbv_area, ncbv)]
-		Is = P['cbv_area%d_cbv%i_std' %(cbv_area, ncbv)]
+		I = P['cbv_area%d_cbv%i' %(cbv_area, ncbv+1)]
+		Is = P['cbv_area%d_cbv%i_std' %(cbv_area, ncbv+1)]
 		# negative log prior
-		Ptot = 0.5*(float(c-I(X))/Is(X))**2
-		return Ptot
 		
-#		Ptot = 0
-#		
-#		for jj, ncbv in enumerate(np.arange(1,ncbvs+1)):
-#		return Ptot
-
+		mid = I(X[0],X[1])
+		wid = wscale*Is(X[0],X[1])
+		Ptot = 0.5*( (c-mid)/ wid)**2 + np.log(wid)
+		return Ptot
 	
-	def fitting(self, flux, Ncbvs, method='powell'):
+	
+	def fitting_lh(self, flux, Ncbvs, method='powell'):
 		if method=='powell':
 			# Initial guesses for coefficients:
-			coeffs0 = np.zeros(Ncbvs, dtype='float64')
+			coeffs0 = np.zeros(Ncbvs+1, dtype='float64')
 			coeffs0[0] = 1
 			
-#			T0 = TIME.time()
-			res = np.zeros(Ncbvs, dtype='float64')
+			res = np.zeros(Ncbvs, dtype='float64')				
 			for jj in range(Ncbvs):
 				res[jj] = minimize(self._lhood1d, coeffs0[jj], args=(flux, jj), method='Powell').x
-#			print(res)
-#			print(TIME.time()-T0)
-#			
-#			T1 = TIME.time()
-#			res2 = minimize(self._lhood, coeffs0, args=(flux, ), method='Powell').x
-#			print(res2)
-#			print(TIME.time()-T1)
-			
-			
-			
+				
+			offset = minimize(self._lhood_off, coeffs0[-1], args=(flux, res), method='Powell').x
+			res = np.append(res, offset)	
+
 			return res
-			
-#			return res.x
-		
+
 		elif method=='llsq':
-			res = CBV.lsfit(flux)
+			res = self.lsfit(flux)
+			res[-1] -= 1
+			return res
+		
+	def fitting_pos(self, flux, Ncbvs, cbv_area, Prior_dict, pos, method='powell', wscale=5):
+		if method=='powell':
+			# Initial guesses for coefficients:
+#			coeffs0 = np.zeros(Ncbvs, dtype='float64')
+			coeffs0 = np.zeros(Ncbvs+1, dtype='float64')
+			coeffs0[0] = 1
+			
+#			res = np.zeros(Ncbvs, dtype='float64')				
+#			for jj in range(Ncbvs):
+			res = np.zeros(Ncbvs, dtype='float64')				
+			for jj in range(Ncbvs):	
+				res[jj] = minimize(self._posterior1d, coeffs0[jj], args=(flux, jj, cbv_area, Prior_dict, pos, wscale), method='Powell').x
+				
+			offset = minimize(self._lhood_off, coeffs0[-1], args=(flux, res), method='Powell').x
+
+			res = np.append(res, offset)
 			return res
 
 	
 
-	def fit(self, flux, Numcbvs=2, sigma_clip=4.0, maxiter=3, use_bic=True, method='powel'):
+	def fit(self, flux, pos=None, cbv_area=None, Prior_dict=None, Numcbvs=2, sigma_clip=4.0, maxiter=3, use_bic=True, method='powel', func='pos', wscale=5):
 
 		# Find the median flux to normalise light curve
 		median_flux = nanmedian(flux)
@@ -365,16 +397,31 @@ class CBV(object):
 			Nstart = Numcbvs
 	
 	
-		# TODO: Early break if results are unchanged
 		for Ncbvs in range(Nstart, Numcbvs+1):
 			
 			iters = 0
 			fluxi = np.copy(flux) / median_flux 
 			while iters <= maxiter:
 				iters += 1
-
+				
 				# Do the fit:
-				res = self.fitting(fluxi, Ncbvs, method=method)
+				if func=='pos':
+					res = self.fitting_pos(fluxi, Ncbvs, cbv_area, Prior_dict, pos, method=method, wscale=5)
+				else:
+					res = self.fitting_lh(fluxi, Ncbvs, method=method)
+					
+				
+				# Break if nothing changes
+				if iters==1:
+					d = 1
+					res0 = res
+				else:
+					d = np.sum(res0 - res)
+					res0 = res
+					if d==0:
+						break
+					
+					
 				flux_filter = self.mdl(res)
 
 				# Do robust sigma clipping:
@@ -536,9 +583,6 @@ def ini_fit(filepath_todo, do_plots=True, n_components0=8):
 			plt.close(fig)
 
 		
-
-
-#		sys.exit()
 		#---------------------------------------------------------------------------------------------------------
 		# CORRECTING STARS
 		#---------------------------------------------------------------------------------------------------------
@@ -546,10 +590,12 @@ def ini_fit(filepath_todo, do_plots=True, n_components0=8):
 		print("CORRECTING STARS...")
 
 		# Query for all stars, no matter what variability and so on
-		cursor.execute("""SELECT starid FROM todolist WHERE
+		cursor.execute("""SELECT todolist.starid,todolist.priority, eclon, eclat FROM todolist LEFT JOIN diagnostics ON todolist.priority=diagnostics.priority WHERE
 			datasource='ffi'
 			AND cbv_area=?
 			AND status=1;""", (cbv_area, ))
+		
+
 		stars = cursor.fetchall()
 
 		# Load the cbv from file:
@@ -557,20 +603,27 @@ def ini_fit(filepath_todo, do_plots=True, n_components0=8):
 		
 		results = np.zeros([len(stars), n_components+2])
 
-		for kk, star in enumerate(stars):
+		for kk, star in tqdm(enumerate(stars), total=len(stars)):
 			starid = star['starid']
-			print(starid, kk, len(stars))
+#			print(starid, kk, len(stars))
 
 			data = pd.read_csv(os.path.join('sysnoise', 'Star%d.sysnoise' % (starid,)),  usecols=(0, 1), skiprows=6, sep=' ', header=None, names=['Time', 'Flux'])
 			time, flux = data['Time'].values, data['Flux'].values
 
 			# Fit the CBV to the flux:
-			flux_filter, res = cbv.fit(flux, Numcbvs=n_components, use_bic=False, method='powell')
+
+#			Prior_dict = cbv._prior_load(cbv_areas)
+#			pos = np.array([star['eclon'], star['eclat']])
+#			flux_filter, res = cbv.fit(flux, pos=pos, cbv_area=cbv_area, Prior_dict=Prior_dict, Numcbvs=3, use_bic=False, method='powell', func='pos', wscale=5)
 			
+#			flux_filter, res = cbv.fit(flux, Numcbvs=n_components, use_bic=False, method='powell', func='lh')
+			flux_filter, res = cbv.fit(flux, Numcbvs=n_components, use_bic=False, method='llsq', func='lh')
+			
+			
+			print(res)
 			res = np.array([res,]).flatten()
 			results[kk, 0] = starid
 			results[kk, 1:len(res)+1] = res
-			print(res)
 			
 			
 			# Plot comparison between clean and corrected data
