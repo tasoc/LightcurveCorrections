@@ -31,7 +31,7 @@ from tqdm import tqdm
 import math
 from cbv_util import compute_entopy, _move_median_central_1d, move_median_central, compute_scores, rms, MAD_model
 plt.ioff()
-
+import corner
 import dill
 from scipy import integrate
 
@@ -94,7 +94,6 @@ def ndim_med_filt(v, x, n, dist='euclidean', mad_frac=2):
 # TODO: Tests with polar coordinates in combination with other CBV areas	
 # TODO: mode vs. median in binning
 # TODO: use klepto to cashe interpolation function (https://stackoverflow.com/questions/23997431/is-there-a-way-to-pickle-a-scipy-interpolate-rbf-object)
-# TODO: Normalise interpolation to unit volume -> pdf prior
 
 
 if __name__ == '__main__':
@@ -114,9 +113,13 @@ if __name__ == '__main__':
 	print(cbv_areas)
 	
 	colormap = plt.cm.PuOr #or any other colormap
-	normalize1 = colors.Normalize(vmin=0, vmax=0.45)
-	normalize2 = colors.Normalize(vmin=0, vmax=0.15)
-	normalize3 = colors.Normalize(vmin=0, vmax=0.05)
+	normalize1 = colors.Normalize(vmin=-0.45, vmax=0.45)
+	normalize2 = colors.Normalize(vmin=-0.15, vmax=0.15)
+	normalize3 = colors.Normalize(vmin=-0.05, vmax=0.05)
+
+
+	
+
 
 	fig = plt.figure(figsize=(15,6))
 	ax1 = fig.add_subplot(231)
@@ -151,7 +154,7 @@ if __name__ == '__main__':
 		pos_mag = np.zeros([results.shape[0], 5])
 		
 		for jj, star in enumerate(results[:,0]):
-			cursor.execute("""SELECT todolist.starid,todolist.priority,todolist.tmag,eclon,eclat,mean_flux,variance FROM todolist LEFT JOIN diagnostics ON todolist.priority=diagnostics.priority WHERE
+			cursor.execute("""SELECT todolist.starid,todolist.priority,todolist.tmag,ccd,eclon,eclat,pos_row,pos_column,mean_flux,variance FROM todolist LEFT JOIN diagnostics ON todolist.priority=diagnostics.priority WHERE
 				datasource='ffi'
 				AND status=1
 				AND cbv_area=?
@@ -168,8 +171,11 @@ if __name__ == '__main__':
 					continue
 				
 				
-			pos_mag[jj, 0] = star_single[0]['eclon']
-			pos_mag[jj, 1] = star_single[0]['eclat']
+#			pos_mag[jj, 0] = star_single[0]['eclon']
+#			pos_mag[jj, 1] = star_single[0]['eclat']
+			pos_mag[jj, 0] = star_single[0]['pos_row']+(star_single[0]['ccd']>2)*2048
+			pos_mag[jj, 1] = star_single[0]['pos_column']+(star_single[0]['ccd']%2==0)*2048
+			
 			pos_mag[jj, 2] = star_single[0]['tmag']
 			
 			# Convert to polar coordinates
@@ -191,9 +197,15 @@ if __name__ == '__main__':
 		
 		ELON = results[:,-5]
 		ELAT = results[:,-4]
-		VALS1 = np.abs(results[:,1])
-		VALS2 = np.abs(results[:,2])
-		VALS3 = np.abs(results[:,3])
+		VALS1 = results[:,1]
+		VALS2 = results[:,2]
+		VALS3 = results[:,3]
+		
+		
+#		idx = (VALS1>np.percentile(VALS1, 20)) & (VALS1<np.percentile(VALS1, 80))
+#		corner.corner(np.column_stack((VALS1[idx], VALS2[idx], VALS3[idx])))
+#		plt.show()
+#		sys.exit()
 		
 		# Perform binning
 		
@@ -261,27 +273,27 @@ if __name__ == '__main__':
 #		rbfi2 = SmoothBivariateSpline(verts2[:,0], verts2[:,1], zvals2)
 #		rbfi3 = SmoothBivariateSpline(verts3[:,0], verts3[:,1], zvals3)
 		
-		with open('Rbf_area%d_cbv1.pkl' %cbv_area, 'wb') as file:
-			dill.dump(rbfi1, file)
-		with open('Rbf_area%d_cbv1_std.pkl' %cbv_area, 'wb') as file:
-			dill.dump(rbfi4, file)	
-			
-		with open('Rbf_area%d_cbv2.pkl' %cbv_area, 'wb') as file:
-			dill.dump(rbfi2, file)
-		with open('Rbf_area%d_cbv2_std.pkl' %cbv_area, 'wb') as file:
-			dill.dump(rbfi5, file)	
-			
-		with open('Rbf_area%d_cbv3.pkl' %cbv_area, 'wb') as file:
-			dill.dump(rbfi3, file)
-		with open('Rbf_area%d_cbv3_std.pkl' %cbv_area, 'wb') as file:
-			dill.dump(rbfi6, file)		
-
-
-
-
-
-		with open('Rbf_area%d_cbv1.pkl' %cbv_area, 'rb') as file:
-			B = dill.load(file)
+#		with open('Rbf_area%d_cbv1.pkl' %cbv_area, 'wb') as file:
+#			dill.dump(rbfi1, file)
+#		with open('Rbf_area%d_cbv1_std.pkl' %cbv_area, 'wb') as file:
+#			dill.dump(rbfi4, file)	
+#			
+#		with open('Rbf_area%d_cbv2.pkl' %cbv_area, 'wb') as file:
+#			dill.dump(rbfi2, file)
+#		with open('Rbf_area%d_cbv2_std.pkl' %cbv_area, 'wb') as file:
+#			dill.dump(rbfi5, file)	
+#			
+#		with open('Rbf_area%d_cbv3.pkl' %cbv_area, 'wb') as file:
+#			dill.dump(rbfi3, file)
+#		with open('Rbf_area%d_cbv3_std.pkl' %cbv_area, 'wb') as file:
+#			dill.dump(rbfi6, file)		
+#
+#
+#
+#
+#
+#		with open('Rbf_area%d_cbv1.pkl' %cbv_area, 'rb') as file:
+#			B = dill.load(file)
 		
 		
 #		I=integrate.nquad(B, [[verts1[:,0].min(), verts1[:,0].max()], [verts1[:,1].min(), verts1[:,1].max()]], full_output=True) #opts=[opts0,{},{},{}], 
@@ -299,8 +311,8 @@ if __name__ == '__main__':
 #		from scipy.interpolate import griddata
 #		grid_z0 = griddata(verts1, zvals1, (xv1, yv1), method='nearest')
 
-		ax1_2.contourf(xv1, yv1, B(xv1, yv1), cmap=colormap, norm=normalize1)
-#		ax1_2.contourf(xv1, yv1, rbfi1(xv1, yv1), cmap=colormap, norm=normalize1)
+#		ax1_2.contourf(xv1, yv1, B(xv1, yv1), cmap=colormap, norm=normalize1)
+		ax1_2.contourf(xv1, yv1, rbfi1(xv1, yv1), cmap=colormap, norm=normalize1)
 		ax2_2.contourf(xv2, yv2, rbfi2(xv2, yv2), cmap=colormap, norm=normalize2)
 		ax3_2.contourf(xv3, yv3, rbfi3(xv3, yv3), cmap=colormap, norm=normalize3)
 		ax4_2.contourf(xv4, yv4, rbfi4(xv4, yv4), cmap=colormap, norm=normalize1)
