@@ -305,11 +305,21 @@ class CBV(object):
 	def _lhood_off(self, coeffs, flux, fitted):
 		return 0.5*nansum((flux - self.mdl_off(coeffs, fitted))**2)
 
+	def _lhood_off_2(self, coeffs, flux, err, fitted):
+		return 0.5*nansum(((flux - self.mdl_off(coeffs, fitted))/err)**2) + 0.5*np.log(err)
+
 	def _lhood1d(self, coeff, flux, ncbv):
 		return 0.5*nansum((flux - self.mdl1d(coeff, ncbv))**2)
 	
+	def _lhood1d_2(self, coeff, flux, err, ncbv):
+		return 0.5*nansum(((flux - self.mdl1d(coeff, ncbv))/err)**2) + 0.5*np.log(err)
+	
 	def _posterior1d(self, coeff, flux, ncbv, cbv_area, Pdict, pos, wscale=5):
 		Post = self._lhood1d(coeff, flux, ncbv) + self._prior1d(Pdict, coeff, pos, cbv_area, ncbv, wscale)
+		return Post
+	
+	def _posterior1d_2(self, coeff, flux, err, ncbv, cbv_area, Pdict, pos, wscale=5):
+		Post = self._lhood1d_2(coeff, flux, err, ncbv) + self._prior1d(Pdict, coeff, pos, cbv_area, ncbv, wscale)
 		return Post
 	
 	
@@ -325,6 +335,15 @@ class CBV(object):
 					P['cbv_area%d_cbv%i_std' %(cbv_area, ncbv)] = Is
 		return P
 
+	def _priorcurve(self, P, x, cbv_area, Ncbvs):
+		X = np.array(x)
+		res = np.zeros_like(self.cbv[:, 0], dtype='float64')				
+		for ncbv in range(Ncbvs):	
+			I = P['cbv_area%d_cbv%i' %(cbv_area, ncbv+1)]
+			mid = I(X[0],X[1])
+			res += self.mdl1d(mid, ncbv) - 1
+		return res + 1
+
 	def _prior1d(self, P, c, x, cbv_area, ncbv, wscale=5):
 		X = np.array(x)
 		I = P['cbv_area%d_cbv%i' %(cbv_area, ncbv+1)]
@@ -333,7 +352,7 @@ class CBV(object):
 		
 		mid = I(X[0],X[1])
 		wid = wscale*Is(X[0],X[1])
-		Ptot = 0.5*( (c-mid)/ wid)**2 + np.log(wid)
+		Ptot = 0.5*( (c-mid)/ wid)**2 + 0.5*np.log(wid)
 		return Ptot
 	
 	
@@ -360,12 +379,9 @@ class CBV(object):
 	def fitting_pos(self, flux, Ncbvs, cbv_area, Prior_dict, pos, method='powell', wscale=5):
 		if method=='powell':
 			# Initial guesses for coefficients:
-#			coeffs0 = np.zeros(Ncbvs, dtype='float64')
 			coeffs0 = np.zeros(Ncbvs+1, dtype='float64')
 			coeffs0[0] = 1
-			
-#			res = np.zeros(Ncbvs, dtype='float64')				
-#			for jj in range(Ncbvs):
+
 			res = np.zeros(Ncbvs, dtype='float64')				
 			for jj in range(Ncbvs):	
 				res[jj] = minimize(self._posterior1d, coeffs0[jj], args=(flux, jj, cbv_area, Prior_dict, pos, wscale), method='Powell').x
@@ -375,9 +391,23 @@ class CBV(object):
 			res = np.append(res, offset)
 			return res
 
+	def fitting_pos_2(self, flux, err, Ncbvs, cbv_area, Prior_dict, pos, method='powell', wscale=5):
+		if method=='powell':
+			# Initial guesses for coefficients:
+			coeffs0 = np.zeros(Ncbvs+1, dtype='float64')
+			coeffs0[0] = 1
+
+			res = np.zeros(Ncbvs, dtype='float64')				
+			for jj in range(Ncbvs):	
+				res[jj] = minimize(self._posterior1d_2, coeffs0[jj], args=(flux, err, jj, cbv_area, Prior_dict, pos, wscale), method='Powell').x
+				
+			offset = minimize(self._lhood_off_2, coeffs0[-1], args=(flux, err, res), method='Powell').x
+
+			res = np.append(res, offset)
+			return res
 	
 
-	def fit(self, flux, pos=None, cbv_area=None, Prior_dict=None, Numcbvs=2, sigma_clip=4.0, maxiter=3, use_bic=True, method='powel', func='pos', wscale=5):
+	def fit(self, flux, err=None, pos=None, cbv_area=None, Prior_dict=None, Numcbvs=2, sigma_clip=4.0, maxiter=3, use_bic=True, method='powel', func='pos', wscale=5):
 
 		# Find the median flux to normalise light curve
 		median_flux = nanmedian(flux)
@@ -406,7 +436,8 @@ class CBV(object):
 				
 				# Do the fit:
 				if func=='pos':
-					res = self.fitting_pos(fluxi, Ncbvs, cbv_area, Prior_dict, pos, method=method, wscale=5)
+#					res = self.fitting_pos(fluxi, Ncbvs, cbv_area, Prior_dict, pos, method=method, wscale=5)
+					res = self.fitting_pos_2(fluxi, err, Ncbvs, cbv_area, Prior_dict, pos, method=method, wscale=wscale)
 				else:
 					res = self.fitting_lh(fluxi, Ncbvs, method=method)
 					
@@ -421,7 +452,7 @@ class CBV(object):
 					if d==0:
 						break
 					
-					
+				print(iters)	
 				flux_filter = self.mdl(res)
 
 				# Do robust sigma clipping:
@@ -612,15 +643,37 @@ def ini_fit(filepath_todo, do_plots=True, n_components0=8):
 
 			# Fit the CBV to the flux:
 
-#			Prior_dict = cbv._prior_load(cbv_areas)
-#			pos = np.array([star['eclon'], star['eclat']])
-#			flux_filter, res = cbv.fit(flux, pos=pos, cbv_area=cbv_area, Prior_dict=Prior_dict, Numcbvs=3, use_bic=False, method='powell', func='pos', wscale=5)
+			#Check to add scale to prior width based on residual
+		
+
+			Prior_dict = cbv._prior_load(cbv_areas)
+			pos = np.array([star['eclon'], star['eclat']])
+			
+			
+			# Prior curve
+			pc = cbv._priorcurve(Prior_dict, pos, cbv_area, 3) * np.nanmedian(flux)
+			
+			# Compute new variability measure
+			residual = MAD_model(flux-pc)
+			residual_ratio = residual/MAD_model(flux-np.nanmedian(flux)) 
+			
+			WS = np.max([1, 1/residual_ratio])
+			
+			if WS>20:
+				flux_filter, res = cbv.fit(flux, Numcbvs=3, use_bic=False, method='powell', func='lh')
+			else:
+				alpha = 1.3
+				flux_filter, res = cbv.fit(flux, err=residual, pos=pos, cbv_area=cbv_area, Prior_dict=Prior_dict, Numcbvs=3, use_bic=False, method='powell', func='pos', wscale=WS**alpha)
+#			flux_filter, res = cbv.fit(flux, pos=pos, cbv_area=cbv_area, Prior_dict=Prior_dict, Numcbvs=3, use_bic=False, method='powell', func='pos', wscale=WS)
+			
+			
+			
 			
 #			flux_filter, res = cbv.fit(flux, Numcbvs=n_components, use_bic=False, method='powell', func='lh')
-			flux_filter, res = cbv.fit(flux, Numcbvs=n_components, use_bic=False, method='llsq', func='lh')
+#			flux_filter, res = cbv.fit(flux, Numcbvs=n_components, use_bic=False, method='llsq', func='lh')
 			
 			
-			print(res)
+			print(residual)
 			res = np.array([res,]).flatten()
 			results[kk, 0] = starid
 			results[kk, 1:len(res)+1] = res
@@ -635,11 +688,13 @@ def ini_fit(filepath_todo, do_plots=True, n_components0=8):
 				ax1 = fig.add_subplot(211)
 				ax1.plot(time, flux)
 				ax1.plot(time, flux_filter)
+				ax1.plot(time, pc, 'm--')
 				ax1.set_xticks([])
 				ax2 = fig.add_subplot(212)
 				ax2.plot(time, flux/flux_filter-1)
 				ax2.plot(time_clean, flux_clean/nanmedian(flux_clean)-1, alpha=0.5)
 				ax2.set_xlabel('Time')
+				ax2.set_title(str(WS))
 				plt.tight_layout()
 				fig.savefig('plots/sector%02d/stars_area%d/star%d.png' % (sector, cbv_area, starid))
 				plt.close('all')
