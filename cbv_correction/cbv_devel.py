@@ -279,7 +279,20 @@ class CBV(object):
 		# Another (but slover) implementation
 #		C = slin.lstsq(X, flux[idx])[0]
 		return C
+	
+	def GOC(self, ori_flux, corrected_flux):
 		
+		# Added white noise
+		do = MAD_model(np.diff(ori_flux-np.nanmedian(ori_flux)))
+		dc = MAD_model(np.diff(corrected_flux))
+		wn_ratio = dc/do
+		
+		#Do power spectrum integration
+		
+		# Earth point
+		
+		# Correlation
+		return wn_ratio
 		
 	def mdl(self, coeffs):
 		coeffs = np.atleast_1d(coeffs)
@@ -452,7 +465,7 @@ class CBV(object):
 					if d==0:
 						break
 					
-				print(iters)	
+
 				flux_filter = self.mdl(res)
 
 				# Do robust sigma clipping:
@@ -673,7 +686,7 @@ def ini_fit(filepath_todo, do_plots=True, n_components0=8):
 #			flux_filter, res = cbv.fit(flux, Numcbvs=n_components, use_bic=False, method='llsq', func='lh')
 			
 			
-			print(residual)
+			print(residual, cbv.GOC(flux, flux-flux_filter))
 			res = np.array([res,]).flatten()
 			results[kk, 0] = starid
 			results[kk, 1:len(res)+1] = res
