@@ -83,7 +83,107 @@ def ndim_med_filt(v, x, n, dist='euclidean', mad_frac=2):
 			
 		if (v[i]<vm+mad_frac*mad) & (v[i]>vm-mad_frac*mad):
 			idx[i] = True
-	return idx			
+	return idx		
+
+def compute_weight_interpolations(filepath_todo, sector):
+		
+	# Open the TODO file for that sector:
+	conn = sqlite3.connect(filepath_todo)
+	conn.row_factory = sqlite3.Row
+	cursor = conn.cursor()
+	
+	# Get list of CBV areas:
+	cursor.execute("SELECT DISTINCT cbv_area FROM todolist ORDER BY cbv_area;")
+	cbv_areas = [int(row[0]) for row in cursor.fetchall()]
+	print(cbv_areas)
+		
+	
+	#TODO: obtain from sector information
+	midx = 40.54 # Something wrong! field is 27 deg wide, not 24
+	midy = 18
+	
+	# Loop through the CBV areas:
+	# - or run them in parallel - whatever you like!
+	for ii, cbv_area in enumerate(cbv_areas):	
+		
+		results = np.load('mat-sector%02d-%d_free_weights.npz' % (sector, cbv_area))['res']
+		n_stars = results.shape[0]
+		n_cbvs = results.shape[1]-2 #results also include star name and offset
+		pos_mag = np.zeros([n_stars, 7])
+		
+		for jj, star in enumerate(results[:,0]):
+			cursor.execute("""SELECT todolist.starid,todolist.priority,todolist.tmag,ccd,eclon,eclat,pos_row,pos_column,mean_flux,variance FROM todolist LEFT JOIN diagnostics ON todolist.priority=diagnostics.priority WHERE
+				datasource='ffi'
+				AND status=1
+				AND cbv_area=?
+				AND todolist.starid=?
+			ORDER BY variability ASC LIMIT 30000;""", (cbv_area, int(star)))		
+			star_single = cursor.fetchall()
+			
+			# Fix small glitch /by Rasmus) in assignment of lat/lon
+			if cbv_area==122:
+				if star_single[0]['eclat']>15:
+					pos_mag[jj, 0] = 50
+					pos_mag[jj, 1] = 10
+					pos_mag[jj, 2] = 10
+					continue
+				
+				
+			pos_mag[jj, 0] = star_single[0]['eclon']
+			pos_mag[jj, 1] = star_single[0]['eclat']
+			pos_mag[jj, 2] = star_single[0]['pos_row']+(star_single[0]['ccd']>2)*2048
+			pos_mag[jj, 3] = star_single[0]['pos_column']+(star_single[0]['ccd']%2==0)*2048
+			
+			pos_mag[jj, 4] = star_single[0]['tmag']
+			
+			# Convert to polar coordinates
+			angle = math.atan2(star_single[0]['eclat']-midy, star_single[0]['eclon']-midx)
+			angle = angle * 360 / (2*np.pi)
+			if (angle < 0):
+				angle += 360
+			pos_mag[jj, 5] = np.sqrt((star_single[0]['eclon']-midx)**2 + (star_single[0]['eclat']-midy)**2)
+			pos_mag[jj, 6] = angle
+			
+				
+		results=np.column_stack((results, pos_mag))
+		
+		ROW = results[:,-5]
+		COL = results[:,-4]
+		
+		
+		for j in range(n_cbvs):
+			
+			VALS = results[:,1+j]
+			# Perform binning
+			
+			# CBV values
+			hbm = plt.hexbin(ROW, COL, C=VALS, gridsize=10, reduce_C_function=reduce_mode)
+			# CBV values scatter
+			hbs = plt.hexbin(ROW, COL, C=VALS, gridsize=10, reduce_C_function=reduce_std)
+		
+			plt.close('all')
+			# Get values and vertices of hexbinning
+			zvalsm = hbm.get_array();		vertsm = hbm.get_offsets()
+			zvalss = hbs.get_array();		vertss = hbs.get_offsets()
+		
+			# Bins to keed for interpolation
+			idxm = ndim_med_filt(zvalsm, vertsm, 6)
+			idxs = ndim_med_filt(zvalss, vertss, 6)
+		
+			# Trim binned values before interpolation
+			zvalsm, vertsm = zvalsm[idxm], vertsm[idxm] 
+			zvalss, vertss = zvalss[idxs], vertss[idxs] 
+		
+			rbfim = Rbf(vertsm[:,0], vertsm[:,1], zvalsm, smooth=1)
+			rbfis = Rbf(vertss[:,0], vertss[:,1], zvalss, smooth=1)
+			
+			with open('Rbf_area%d_cbv%i.pkl' %(cbv_area,int(j+1)), 'wb') as file:
+				dill.dump(rbfim, file)
+			with open('Rbf_area%d_cbv%i_std.pkl' %(cbv_area,int(j+1)), 'wb') as file:
+				dill.dump(rbfis, file)	
+				
+				
+	
 #------------------------------------------------------------------------------
 	
 # TODO: include removal of simple trend in nd median filtering
@@ -118,9 +218,6 @@ if __name__ == '__main__':
 	normalize3 = colors.Normalize(vmin=-0.05, vmax=0.05)
 
 
-	
-
-
 	fig = plt.figure(figsize=(15,6))
 	ax1 = fig.add_subplot(231)
 	ax2 = fig.add_subplot(232)
@@ -151,7 +248,9 @@ if __name__ == '__main__':
 		
 
 		results = np.load('mat-sector%02d-%d_free_weights.npz' % (sector, cbv_area))['res']
-		pos_mag = np.zeros([results.shape[0], 5])
+		n_stars = results.shape[0]
+		n_cbvs = results.shape[1]-2 #results also include star name and offset
+		pos_mag = np.zeros([n_stars, 5])
 		
 		for jj, star in enumerate(results[:,0]):
 			cursor.execute("""SELECT todolist.starid,todolist.priority,todolist.tmag,ccd,eclon,eclat,pos_row,pos_column,mean_flux,variance FROM todolist LEFT JOIN diagnostics ON todolist.priority=diagnostics.priority WHERE
@@ -197,6 +296,40 @@ if __name__ == '__main__':
 		
 		ELON = results[:,-5]
 		ELAT = results[:,-4]
+		
+		
+		for j in range(n_cbvs):
+			
+			VALS = results[:,1+j]
+			# Perform binning
+			
+			# CBV values
+			hbm = plt.hexbin(ELON, ELAT, C=VALS, gridsize=10, reduce_C_function=reduce_mode, cmap=colormap, norm=normalize1, marginals=False)
+			# CBV values scatter
+			hbs = plt.hexbin(ELON, ELAT, C=VALS, gridsize=10, reduce_C_function=reduce_std, cmap=colormap, norm=normalize1, marginals=False)
+		
+			# Get values and vertices of hexbinning
+			zvalsm = hbm.get_array();		vertsm = hbm.get_offsets()
+			zvalss = hbs.get_array();		vertss = hbs.get_offsets()
+		
+			# Bins to keed for interpolation
+			idxm = ndim_med_filt(zvalsm, vertsm, 6)
+			idxs = ndim_med_filt(zvalss, vertss, 6)
+		
+			# Trim binned values before interpolation
+			zvalsm, vertsm = zvalsm[idxm], vertsm[idxm] 
+			zvalss, vertss = zvalss[idxs], vertss[idxs] 
+		
+			rbfim = Rbf(vertsm[:,0], vertsm[:,1], zvalsm, smooth=1)
+			rbfis = Rbf(vertss[:,0], vertss[:,1], zvalss, smooth=1)
+			
+			with open('Rbf_area%d_cbv%i.pkl' %(cbv_area,int(j+1)), 'wb') as file:
+				dill.dump(rbfim, file)
+			with open('Rbf_area%d_cbv%i_std.pkl' %(cbv_area,int(j+1)), 'wb') as file:
+				dill.dump(rbfis, file)	
+				
+				
+				
 		VALS1 = results[:,1]
 		VALS2 = results[:,2]
 		VALS3 = results[:,3]

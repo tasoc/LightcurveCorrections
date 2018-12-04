@@ -90,7 +90,9 @@ def clean_cbv(Matrix, n_components, ent_limit=-1.5, targ_limit=50):
 	print('Targets removed ', targets_removed)
 	return Matrix
 
+#------------------------------------------------------------------------------
 def AlmightyCorrcoefEinsumOptimized(O, P):
+	
     (n, t) = O.shape      # n traces of t samples
     (n_bis, m) = P.shape  # n predictions for each of m candidates
 
@@ -106,33 +108,24 @@ def AlmightyCorrcoefEinsumOptimized(O, P):
     return cov / np.sqrt(tmp)
 
 
-
+#------------------------------------------------------------------------------
 def lc_matrix_calc(Nstars, mat, stds):
 	
 	print("Calculating correlations...")
+	mat[np.isnan(mat)] = 0
+	correlations = np.abs(AlmightyCorrcoefEinsumOptimized(mat.T, mat.T))
+	np.fill_diagonal(correlations, np.nan)
+	
+	
+	
 #	correlations = np.empty((Nstars, Nstars), dtype='float64')
 #	np.fill_diagonal(correlations, np.nan) # Put NaNs on the diagonal
-	
-	mat[np.isnan(mat)] = 0
+
 #	print(mat.shape, Nstars)
 	
 #	for i, j in tqdm(itertools.combinations(range(Nstars), 2), total=0.5*Nstars**2-Nstars):
 #		r = pearsonr(mat[i, :]/stds[i], mat[j, :]/stds[j])[0]
 #		correlations[i,j] = correlations[j,i] = np.abs(r)
-
-#	correlations2 = np.empty((Nstars, Nstars), dtype='float64')
-#	np.fill_diagonal(correlations2, np.nan)
-	correlations = np.abs(AlmightyCorrcoefEinsumOptimized(mat.T, mat.T))
-	np.fill_diagonal(correlations, np.nan)
-#	print(r2.shape)
-	
-	
-#	for i, j in tqdm(itertools.combinations(range(Nstars), 2), total=0.5*Nstars**2-Nstars):
-##		r = pearsonr(mat[i, :]/stds[i], mat[j, :]/stds[j])[0]
-#		correlations2[i,j] = correlations2[j,i] = np.abs(r2[i,j])
-#		
-#		if not np.isclose(correlations[i,j], correlations2[i,j], equal_nan=True):
-#			print(correlations[i,j], correlations2[i,j], correlations[i,j]-correlations2[i,j])
 
 
 #	np.testing.assert_allclose(correlations, correlations2)
@@ -143,16 +136,12 @@ def lc_matrix_calc(Nstars, mat, stds):
 #
 #	plt.figure()
 #	plt.matshow(correlations-correlations2)
-#	
-#	print(np.nansum(np.sum(correlations-correlations2)))
 #	plt.show()
-#
-#	sys.exit()
 		
 	return correlations	
 
 
-
+#------------------------------------------------------------------------------
 def lc_matrix(sector, cbv_area, cursor):
 	
 	#---------------------------------------------------------------------------------------------------------
@@ -323,56 +312,6 @@ def GOC_corrmatrix(sector, cbv_area, cursor, exponent=3):
 	#---------------------------------------------------------------------------------------------------------
 	print("We are running CBV_AREA=%d" % cbv_area)
 
-	# Query for all stars, no matter what variability and so on
-	cursor.execute("""SELECT todolist.starid,todolist.priority, eclon, eclat FROM todolist LEFT JOIN diagnostics ON todolist.priority=diagnostics.priority WHERE
-		datasource='ffi'
-		AND cbv_area=?
-		AND status=1;""", (cbv_area, ))
-	
-	stars = cursor.fetchall()
-
-	# Number of stars returned:
-	Nstars = len(stars)
-
-	# Load the very first timeseries only to find the number of timestamps.
-	# TODO: When using FITS files in the future, this could simply be loaded from the header.
-	time = np.loadtxt(os.path.join('sysnoise', 'Star%d.sysnoise' % (stars[0]['starid'],)), usecols=(0, ), unpack=True)
-	Ntimes = len(time)
-
-	print("Matrix size: %d x %d" % (Nstars, Ntimes))
-
-	# Make the matrix that will hold all the lightcurves:
-	print("Loading in lightcurves...")
-	mat = np.empty((Nstars, Ntimes), dtype='float64')
-	mat.fill(np.nan)
-	stds = np.empty(Nstars, dtype='float64')
-	
-	for k, star in tqdm(enumerate(stars), total=Nstars):
-		starid = star['starid']
-
-		flux = np.loadtxt(os.path.join('cbv_corrected', 'sector%02d', 'area%d', 'Star%d.corr' % (sector, cbv_area, starid,)), usecols=(1, ), unpack=True)
-
-		# Normalize the data and store it in the rows of the matrix:
-		mat[k, :] = flux
-		stds[k] = np.nanstd(flux) #np.sqrt(star['variance'])
-
-	# Only start calculating correlations if we are actually filtering using them:
-	file_correlations = 'correlations-postcorr-sector%02d-%d.npy' % (sector, cbv_area)
-	if os.path.exists(file_correlations):
-		correlations = np.load(file_correlations)
-	else:
-		# Calculate the correlation matrix between all lightcurves:
-		correlations = lc_matrix_calc(Nstars, mat, stds)
-		np.save(file_correlations, correlations)
-		
-		
-		fig = plt.figure()
-		ax = fig.add_subplot(111)
-		ax.matshow(correlations)
-		fig.savefig('correlations-postcorr-sector%02d-%d.png' % (sector, cbv_area))
-		plt.close(fig)
-	
-	
 	file_median_correlations = 'correlations-median_postcorr-sector%02d-%d.json' % (sector, cbv_area)
 	# Find the median absolute correlation between each lightcurve and all other lightcurves:
 	
@@ -380,6 +319,58 @@ def GOC_corrmatrix(sector, cbv_area, cursor, exponent=3):
 		with open(file_median_correlations) as infile:
 			C = json.load(infile)
 	else:	
+
+		# Query for all stars, no matter what variability and so on
+		cursor.execute("""SELECT todolist.starid,todolist.priority, eclon, eclat FROM todolist LEFT JOIN diagnostics ON todolist.priority=diagnostics.priority WHERE
+			datasource='ffi'
+			AND cbv_area=?
+			AND status=1;""", (cbv_area, ))
+		
+		stars = cursor.fetchall()
+	
+		# Number of stars returned:
+		Nstars = len(stars)
+	
+		# Load the very first timeseries only to find the number of timestamps.
+		# TODO: When using FITS files in the future, this could simply be loaded from the header.
+		time = np.loadtxt(os.path.join('sysnoise', 'Star%d.sysnoise' % (stars[0]['starid'],)), usecols=(0, ), unpack=True)
+		Ntimes = len(time)
+	
+		print("Matrix size: %d x %d" % (Nstars, Ntimes))
+	
+		# Make the matrix that will hold all the lightcurves:
+		print("Loading in lightcurves...")
+		mat = np.empty((Nstars, Ntimes), dtype='float64')
+		mat.fill(np.nan)
+		stds = np.empty(Nstars, dtype='float64')
+		
+		for k, star in tqdm(enumerate(stars), total=Nstars):
+			starid = star['starid']
+	
+			flux = np.loadtxt(os.path.join('cbv_corrected', 'sector%02d', 'area%d', 'Star%d.corr' % (sector, cbv_area, starid,)), usecols=(1, ), unpack=True)
+	
+			# Normalize the data and store it in the rows of the matrix:
+			mat[k, :] = flux
+			stds[k] = np.nanstd(flux) #np.sqrt(star['variance'])
+	
+		# Only start calculating correlations if we are actually filtering using them:
+		file_correlations = 'correlations-postcorr-sector%02d-%d.npy' % (sector, cbv_area)
+		if os.path.exists(file_correlations):
+			correlations = np.load(file_correlations)
+		else:
+			# Calculate the correlation matrix between all lightcurves:
+			correlations = lc_matrix_calc(Nstars, mat, stds)
+			np.save(file_correlations, correlations)
+			
+			
+			fig = plt.figure()
+			ax = fig.add_subplot(111)
+			ax.matshow(correlations)
+			fig.savefig('correlations-postcorr-sector%02d-%d.png' % (sector, cbv_area))
+			plt.close(fig)
+	
+	
+	
 		C = {}
 		C['Nstars'] = Nstars
 		C['Exponent'] = exponent
