@@ -3,3 +3,4 @@
 *.npz
 *.pkl
 plots/*.png
+cbv_corrected/*.corr

@@ -31,6 +31,7 @@ import json
 from tqdm import tqdm
 import time as TIME
 from cbv_util import compute_entopy, _move_median_central_1d, move_median_central, compute_scores, rms, MAD_model
+from cbv_weights import compute_weight_interpolations
 plt.ioff()
 
 	
@@ -61,32 +62,33 @@ def clean_cbv(Matrix, n_components, ent_limit=-1.5, targ_limit=50):
 	
 	targets_removed = 0
 	components = np.arange(n_components)
-		
-	while np.any(Ent<ent_limit):
-		com = components[(Ent<ent_limit)][0]
-		
-		# Remove highest relative weight target
-		m = nanmedian(U[:, com])
-		s = 1.46*nanmedian(np.abs(U[:, com] - m))
-		dev = np.abs(U[:, com] - m) / s
-
-		idx0 = np.argmax(dev)
 	
-		star_no = np.ones(U.shape[0], dtype=bool)
-		star_no[idx0] = False
-		print('removing star ', idx0)
+	with np.errstate(invalid='ignore'):	
+		while np.any(Ent<ent_limit):
+			com = components[(Ent<ent_limit)][0]
+			
+			# Remove highest relative weight target
+			m = nanmedian(U[:, com])
+			s = 1.46*nanmedian(np.abs(U[:, com] - m))
+			dev = np.abs(U[:, com] - m) / s
+	
+			idx0 = np.argmax(dev)
 		
-		Matrix = Matrix[star_no, :]
-		U, _, _ = pca._fit(Matrix)
-
-		targets_removed += 1
+			star_no = np.ones(U.shape[0], dtype=bool)
+			star_no[idx0] = False
+			#print('removing star ', idx0)
+			
+			Matrix = Matrix[star_no, :]
+			U, _, _ = pca._fit(Matrix)
+	
+			targets_removed += 1
+			
+			if targets_removed>targ_limit:
+				break
+			
+			Ent = compute_entopy(U)
 		
-		if targets_removed>targ_limit:
-			break
-		
-		Ent = compute_entopy(U)
-		print('Entropy:', Ent)
-		
+	print('Entropy end:', Ent)
 	print('Targets removed ', targets_removed)
 	return Matrix
 
@@ -109,11 +111,16 @@ def AlmightyCorrcoefEinsumOptimized(O, P):
 
 
 #------------------------------------------------------------------------------
-def lc_matrix_calc(Nstars, mat, stds):
+def lc_matrix_calc(Nstars, mat0, stds):
 	
 	print("Calculating correlations...")
-	mat[np.isnan(mat)] = 0
-	correlations = np.abs(AlmightyCorrcoefEinsumOptimized(mat.T, mat.T))
+	
+	indx_nancol = allnan(mat0, axis=0)
+	mat1 = mat0[:, ~indx_nancol]
+	
+	
+	mat1[np.isnan(mat1)] = 0
+	correlations = np.abs(AlmightyCorrcoefEinsumOptimized(mat1.T, mat1.T))
 	np.fill_diagonal(correlations, np.nan)
 	
 	
@@ -203,20 +210,20 @@ def lc_matrix(sector, cbv_area, cursor):
 
 		# Make the matrix that will hold all the lightcurves:
 		print("Loading in lightcurves...")
-		mat = np.empty((Nstars, Ntimes), dtype='float64')
-		mat.fill(np.nan)
-		stds = np.empty(Nstars, dtype='float64')
-		priorities = np.empty(Nstars, dtype='int64')
+		mat0 = np.empty((Nstars, Ntimes), dtype='float64')
+		mat0.fill(np.nan)
+		stds0 = np.empty(Nstars, dtype='float64')
+		priorities0 = np.empty(Nstars, dtype='int64')
 		
 		for k, star in tqdm(enumerate(stars), total=Nstars):
-			priorities[k] = star['priority']
+			priorities0[k] = star['priority']
 			starid = star['starid']
 
 			flux = np.loadtxt(os.path.join('sysnoise', 'Star%d.sysnoise' % (starid,)), usecols=(1, ), unpack=True)
 
 			# Normalize the data and store it in the rows of the matrix:
-			mat[k, :] = flux / star['mean_flux'] - 1.0
-			stds[k] = np.sqrt(star['variance'])
+			mat0[k, :] = flux / star['mean_flux'] - 1.0
+			stds0[k] = np.sqrt(star['variance'])
 
 		# Only start calculating correlations if we are actually filtering using them:
 		if threshold_correlation < 1.0:
@@ -225,7 +232,7 @@ def lc_matrix(sector, cbv_area, cursor):
 				correlations = np.load(file_correlations)
 			else:
 				# Calculate the correlation matrix between all lightcurves:
-				correlations = lc_matrix_calc(Nstars, mat, stds)
+				correlations = lc_matrix_calc(Nstars, mat0, stds0)
 				np.save(file_correlations, correlations)
 
 			# Find the median absolute correlation between each lightcurve and all other lightcurves:
@@ -237,8 +244,9 @@ def lc_matrix(sector, cbv_area, cursor):
 			#TODO: remove based on threshold value? rather than just % of stars
 
 			# Only keep the top 50% of the lightcurves that are most correlated:
-			priorities = priorities[indx]
-			mat = mat[indx, :]
+			priorities = priorities0[indx]
+			mat = mat0[indx, :]
+			stds = stds0[indx]
 
 			# Clean up a bit:
 			del correlations, c, indx
@@ -281,7 +289,6 @@ def lc_matrix_clean(sector, cbv_area, cursor):
 		indx_nancol = allnan(mat0, axis=0)
 		Ntimes = mat0.shape[1]
 		mat = mat0[:, ~indx_nancol]
-
 		cadenceno = np.arange(mat.shape[1])
 
 		# TODO: Is this even needed? Or should it be done earlier?
@@ -419,7 +426,7 @@ def GOC_corr(filepath_todo):
 # =============================================================================
 
 
-def compute_cbvs(filepath_todo, do_plots=True, n_components0=8):
+def compute_cbvs(filepath_todo, do_plots=True, n_components0=8, single_area=None):
 	
 	
 	# Open the TODO file for that sector:
@@ -435,9 +442,12 @@ def compute_cbvs(filepath_todo, do_plots=True, n_components0=8):
 	# Loop through the CBV areas:
 	# - or run them in parallel - whatever you like!
 	for ii, cbv_area in enumerate(cbv_areas):
+		print('------------------------------------')
+		print('Computing CBV for area%d' %cbv_area)
 		
-		if ii>0:
-			continue
+		if not single_area is None:
+			if not cbv_area == single_area:
+				continue
 		
 		if do_plots:
 			# Remove old plots:
@@ -458,7 +468,6 @@ def compute_cbvs(filepath_todo, do_plots=True, n_components0=8):
 
 		# Extract or compute cleaned and gapfilled light curve matrix
 		mat0, priorities, stds, indx_nancol, Ntimes = lc_matrix_clean(sector, cbv_area, cursor)
-		
 		# Calculate initial CBVs
 		pca0 = PCA(n_components0)
 		U0, _, _ = pca0._fit(mat0)
@@ -527,8 +536,11 @@ def compute_cbvs(filepath_todo, do_plots=True, n_components0=8):
 			# Plot all the CBVs:
 			fig, axes = plt.subplots(4, 2, figsize=(12, 8))
 			fig2, axes2 = plt.subplots(4, 2, figsize=(12, 8))
+			fig.subplots_adjust(wspace=0.23, hspace=0.46, left=0.08, right=0.96, top=0.94, bottom=0.055)  
+			fig2.subplots_adjust(wspace=0.23, hspace=0.46, left=0.08, right=0.96, top=0.94, bottom=0.055)  
+
 			for k, ax in enumerate(axes.flatten()):
-				ax.plot(cbv0[:, k], 'r-')		
+				ax.plot(cbv0[:, k]+0.1, 'r-')		
 				if indx_lowsnr[k]:
 					col = 'c'
 				else:
@@ -541,10 +553,10 @@ def compute_cbvs(filepath_todo, do_plots=True, n_components0=8):
 				ax.plot(-np.abs(U0[:, k]), 'r-')
 				ax.plot(np.abs(U[:, k]), 'k-')
 				ax.set_title('Basis Vector %d' % (k+1))
-			plt.tight_layout()
+			#plt.tight_layout()
 			fig.savefig('plots/sector%02d/cbvs-area%d.png' % (sector, cbv_area))
 			fig2.savefig('plots/sector%02d/U_cbvs-area%d.png' % (sector, cbv_area))
-			plt.close(fig)
+			plt.close('all')
 	
 	
 	
@@ -552,7 +564,7 @@ def compute_cbvs(filepath_todo, do_plots=True, n_components0=8):
 # 	
 # =============================================================================
 	
-def cotrend(filepath_todo, do_plots=True, Numcbvs='all', ini=True, use_bic=True, method='powell'):
+def cotrend(filepath_todo, do_plots=True, Numcbvs='all', ini=True, use_bic=True, method='powell', single_area=None):
 	
 	# Open the TODO file for that sector:
 	conn = sqlite3.connect(filepath_todo)
@@ -568,6 +580,10 @@ def cotrend(filepath_todo, do_plots=True, Numcbvs='all', ini=True, use_bic=True,
 	# - or run them in parallel - whatever you like!
 	for ii, cbv_area in enumerate(cbv_areas):
 		
+		if not single_area is None:
+			if not cbv_area==single_area:
+				continue
+			
 	#---------------------------------------------------------------------------------------------------------
 	# CORRECTING STARS
 	#---------------------------------------------------------------------------------------------------------
@@ -575,7 +591,7 @@ def cotrend(filepath_todo, do_plots=True, Numcbvs='all', ini=True, use_bic=True,
 		print("CORRECTING STARS...")
 	
 		# Query for all stars, no matter what variability and so on
-		cursor.execute("""SELECT todolist.starid,todolist.priority, eclon, eclat FROM todolist LEFT JOIN diagnostics ON todolist.priority=diagnostics.priority WHERE
+		cursor.execute("""SELECT todolist.starid,todolist.priority, eclon, eclat, pos_row, pos_column FROM todolist LEFT JOIN diagnostics ON todolist.priority=diagnostics.priority WHERE
 			datasource='ffi'
 			AND cbv_area=?
 			AND status=1;""", (cbv_area, ))
@@ -586,42 +602,73 @@ def cotrend(filepath_todo, do_plots=True, Numcbvs='all', ini=True, use_bic=True,
 		cbv0 = CBV('cbv-sector%02d-%d.npy' % (sector, cbv_area))
 		
 		# Signal-to-Noise test:
-		cbv, indx_lowsnr = cbv_snr_reject(cbv0, threshold_snrtest)
-			
-		# Update maximum number of components	
-		n_components = cbv.shape[1]
-		print('New max number of components: ', n_components)
+		cbv_snr, indx_lowsnr = cbv_snr_reject(cbv0.cbv, threshold_snrtest)
+				
+		if ini:
+			cbv = cbv0	
+		else:
+			cbv0.cbv = cbv_snr
+			cbv = cbv0
 		
+		
+		# Update maximum number of components	
+		n_components0 = cbv.cbv.shape[1]
+			
+		
+		print('New max number of components: ', n_components0)
+		
+		if Numcbvs=='all':
+			n_components = n_components0
+		else:	
+			n_components = np.min([Numcbvs, n_components0])
+			
+		print('Fitting using number of components: ', n_components)	
 		results = np.zeros([len(stars), n_components+2])
 		
-		# Remove old files:
-#				flux = np.loadtxt(os.path.join('cbv_corrected', 'sector%02d', '', 'Star%d.corr' % (sector, cbv_area, starid,)), usecols=(1, ), unpack=True)
 
+		#remove old files
 		if ini:
 			if os.path.exists("cbv_corrected/sector%02d/area%d/ini/" % (sector, cbv_area)):
-				for f in glob.iglob("cbv_corrected/sector%02d/area%d/ini/*%d.corr" % (sector, cbv_area)):
+				for f in glob.iglob("cbv_corrected/sector%02d/area%d/ini/*.corr" % (sector, cbv_area)):
 					os.remove(f)		
 			else:    
 				os.makedirs("cbv_corrected/sector%02d/area%d/ini/" % (sector, cbv_area))
 		else:	
 			if os.path.exists("cbv_corrected/sector%02d/area%d" % (sector, cbv_area)):
-				for f in glob.iglob("cbv_corrected/sector%02d/area%d/*%d.corr" % (sector, cbv_area)):
+				for f in glob.iglob("cbv_corrected/sector%02d/area%d/*.corr" % (sector, cbv_area)):
 					os.remove(f)		
 			else:    
 				os.makedirs("cbv_corrected/sector%02d/area%d" % (sector, cbv_area))
+
+
+		# Remove old plots:
+		if ini:
+			if os.path.exists("plots/sector%02d/stars_area%d/ini/" % (sector, cbv_area)):
+				for f in glob.iglob("plots/sector%02d/stars_area%d/ini/*.png" % (sector, cbv_area)):
+					os.remove(f)		
+			else:    
+				os.makedirs("plots/sector%02d/stars_area%d/ini/" % (sector, cbv_area))
+		else:
+			# Remove old plots:
+			if os.path.exists("plots/sector%02d/stars_area%d/" % (sector, cbv_area)):
+				for f in glob.iglob("plots/sector%02d/stars_area%d/*.png" % (sector, cbv_area)):
+					os.remove(f)		
+			else:    
+				os.makedirs("plots/sector%02d/stars_area%d/" % (sector, cbv_area))		
+
 		
 	
 		for kk, star in tqdm(enumerate(stars), total=len(stars)):
 			
 			starid = star['starid']
-			time, flux, flux_filter, res, residual, WS = cbv.cotrend_single(star, cbv_area, cbv_areas, n_components, ini=ini, use_bic=use_bic, method=method)
+			time, flux, flux_filter, res, residual, WS, pc = cbv.cotrend_single(star, cbv_area, cbv_areas, n_components, ini=ini, use_bic=use_bic, method=method)
 			
 			
 			
 			# SAVE TO DIAGNOSTICS FILE::
 			wn_ratio = GOC_wn(flux, flux-flux_filter)
 			
-			print(residual, wn_ratio)
+			#print(residual, wn_ratio)
 			res = np.array([res,]).flatten()
 			results[kk, 0] = starid
 			results[kk, 1:len(res)+1] = res
@@ -631,29 +678,13 @@ def cotrend(filepath_todo, do_plots=True, Numcbvs='all', ini=True, use_bic=True,
 			data_clean = pd.read_csv(os.path.join('noisy', 'Star%d.noisy' % (starid,)),  usecols=(0, 1), skiprows=6, sep=' ', header=None, names=['Time', 'Flux'])
 			time_clean, flux_clean = data_clean['Time'].values, data_clean['Flux'].values
 			
-			if ini:
-				# Remove old plots:
-				if os.path.exists("plots/sector%02d/stars_area%d/ini/" % (sector, cbv_area)):
-					for f in glob.iglob("plots/sector%02d/stars_area%d/ini/*%d.png" % (sector, cbv_area)):
-						os.remove(f)		
-				else:    
-					os.makedirs("plots/sector%02d/stars_area%d/ini/" % (sector, cbv_area))
-			else:
-				# Remove old plots:
-				if os.path.exists("plots/sector%02d/stars_area%d/" % (sector, cbv_area)):
-					for f in glob.iglob("plots/sector%02d/stars_area%d/*%d.png" % (sector, cbv_area)):
-						os.remove(f)		
-				else:    
-					os.makedirs("plots/sector%02d/stars_area%d/" % (sector, cbv_area))		
-					
-					
 	
 			if do_plots:
 				fig = plt.figure()
 				ax1 = fig.add_subplot(211)
 				ax1.plot(time, flux)
 				ax1.plot(time, flux_filter)
-#				ax1.plot(time, pc, 'm--')
+				ax1.plot(time, pc, 'm--')
 				ax1.set_xticks([])
 				ax2 = fig.add_subplot(212)
 				ax2.plot(time, flux/flux_filter-1)
@@ -849,7 +880,7 @@ class CBV(object):
 			return res
 	
 
-	def fit(self, flux, err=None, pos=None, cbv_area=None, Prior_dict=None, Numcbvs=2, sigma_clip=4.0, maxiter=3, use_bic=True, method='powel', func='pos', wscale=5):
+	def fit(self, flux, err=None, pos=None, cbv_area=None, Prior_dict=None, Numcbvs=3, sigma_clip=4.0, maxiter=3, use_bic=True, method='powel', func='pos', wscale=5):
 
 		# Find the median flux to normalise light curve
 		median_flux = nanmedian(flux)
@@ -909,7 +940,7 @@ class CBV(object):
 
 			if use_bic:
 				# Calculate the Bayesian Information Criterion (BIC) and store the solution:
-				bic[Ncbvs] = np.log(np.sum(np.isfinite(fluxi)))*len(res) + CBV._lhood(fluxi, res)
+				bic[Ncbvs] = np.log(np.sum(np.isfinite(fluxi)))*len(res) + self._lhood(res, fluxi)
 				solutions.append(res)
 			
 							
@@ -940,10 +971,14 @@ class CBV(object):
 		if ini:
 			flux_filter, res = self.fit(flux, Numcbvs=n_components, use_bic=False, method='llsq', func='lh')
 			
+			filename = 'cbv_corrected/sector%02d/area%d/ini/Star%d.corr' % (sector, cbv_area, starid,)
+			residual, WS = 0, 0, 0
+			
 		else:	
 	
-			Prior_dict = self._prior_load(cbv_areas)
-			pos = np.array([star['eclon'], star['eclat']])
+			Prior_dict = self._prior_load(cbv_areas, ncbvs=n_components)
+#			pos = np.array([star['eclon'], star['eclat']])
+			pos = np.array([star['pos_row'], star['pos_column']])
 			
 			
 			# Prior curve
@@ -954,7 +989,7 @@ class CBV(object):
 			residual_ratio = residual/MAD_model(flux-np.nanmedian(flux)) 
 			
 			WS = np.max([1, 1/residual_ratio])
-			
+
 			if WS>20:
 				flux_filter, res = self.fit(flux, Numcbvs=3, use_bic=False, method=method, func='lh')
 			else:
@@ -963,10 +998,11 @@ class CBV(object):
 			
 			
 			
-		filename = 'cbv_corrected/sector%02d/area%d/ini/Star%d.corr' % (sector, cbv_area, starid,)
-		flux = np.savetxt(filename, np.column_stack((time, flux/flux_filter - 1, flux_filter)))
-	
-		return time, flux, flux_filter, res, residual, WS
+			filename = 'cbv_corrected/sector%02d/area%d/Star%d.corr' % (sector, cbv_area, starid,)
+			
+			
+		np.savetxt(filename, np.column_stack((time, flux/flux_filter - 1, flux_filter)))
+		return time, flux, flux_filter, res, residual, WS, pc
 
 
 
@@ -986,14 +1022,15 @@ if __name__ == '__main__':
 	threshold_snrtest = 5.0
 	do_plots = True
 	filepath_todo = 'todo.sqlite'
+	area = None
 	
-	compute_cbvs(filepath_todo, do_plots)
+#	compute_cbvs(filepath_todo, do_plots, single_area=area)
 	
-#	cotrend(filepath_todo, do_plots, ini=True)
+#	cotrend(filepath_todo, do_plots=False, Numcbvs='all', use_bic=False, ini=True, single_area=None)
 	
-	#TODO: compute weights
+#	compute_weight_interpolations(filepath_todo, sector)
 	
-#	cotrend(filepath_todo, do_plots, Numcbvs=3, ini=False, use_bic=False, method='powell')
+	cotrend(filepath_todo, do_plots, Numcbvs=3, ini=False, use_bic=False, method='powell', single_area=111)
 
 #	GOC_corr(filepath_todo)
 

@@ -91,7 +91,8 @@ def compute_entopy(U):
 		
 		# Calculate the Gaussian entropy
 		pdfMean = nansum(x * pdf)*dx
-		sigma = np.sqrt( nansum(((x-pdfMean)**2) * pdf) * dx )
+		with np.errstate(invalid='ignore'):
+			sigma = np.sqrt( nansum(((x-pdfMean)**2) * pdf) * dx )
 		HGauss = HGauss0 + np.log(sigma)
 
 		# Calculate vMatrix entropy
